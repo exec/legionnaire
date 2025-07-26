@@ -1,0 +1,31 @@
+[package]
+name = "ironchat"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "A modern, security-hardened IRCv3 client"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/ironchat"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", features = ["std"] }
+webpki-roots = "0.26"
+bytes = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+base64 = "0.22"
+url = "2.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4"] }
+secrecy = "0.8"
+directories = "5.0"
+clap = { version = "4.0", features = ["derive"] }
+ratatui = "0.26"
+crossterm = { version = "0.27", features = ["event-stream"] }
+futures = "0.3"
