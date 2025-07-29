@@ -1,28 +1,31 @@
 use crate::client::IronClient;
 use crate::message::IrcMessage;
-use crate::error::{IronError, Result};
+use crate::error::Result;
 
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use std::collections::HashMap;
 use std::time::SystemTime;
-use tracing::{debug, info, warn, error};
+use crate::{iron_debug, iron_info, iron_error};
 
 pub struct IrcUi {
     client: IronClient,
     message_buffer: Vec<DisplayMessage>,
     current_channel: Option<String>,
     channels: HashMap<String, ChannelState>,
-    command_tx: mpsc::UnboundedSender<UserCommand>,
     command_rx: mpsc::UnboundedReceiver<UserCommand>,
     running: bool,
 }
 
 #[derive(Debug, Clone)]
 struct DisplayMessage {
+    #[allow(dead_code)]
     timestamp: SystemTime,
+    #[allow(dead_code)]
     channel: Option<String>,
+    #[allow(dead_code)]
     sender: Option<String>,
+    #[allow(dead_code)]
     content: String,
     message_type: MessageType,
 }
@@ -36,7 +39,6 @@ enum MessageType {
     Quit,
     Nick,
     Topic,
-    Mode,
     System,
 }
 
@@ -44,6 +46,7 @@ enum MessageType {
 struct ChannelState {
     topic: Option<String>,
     users: Vec<String>,
+    #[allow(dead_code)]
     joined: bool,
 }
 
@@ -62,21 +65,20 @@ enum UserCommand {
 
 impl IrcUi {
     pub fn new(client: IronClient) -> Self {
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (_command_tx, command_rx) = mpsc::unbounded_channel();
         
         Self {
             client,
             message_buffer: Vec::new(),
             current_channel: None,
             channels: HashMap::new(),
-            command_tx,
             command_rx,
             running: false,
         }
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        info!("Starting IronChat UI");
+        iron_info!("ui", "Starting IronChat UI");
         self.running = true;
 
         self.client.connect().await?;
@@ -94,15 +96,15 @@ impl IrcUi {
                     match message_result {
                         Ok(Some(message)) => {
                             if let Err(e) = self.handle_irc_message(message).await {
-                                error!("Error handling IRC message: {}", e);
+                                iron_error!("ui", "Error handling IRC message: {}", e);
                             }
                         }
                         Ok(None) => {
-                            info!("Connection closed by server");
+                            iron_info!("ui", "Connection closed by server");
                             break;
                         }
                         Err(e) => {
-                            error!("Error reading message: {}", e);
+                            iron_error!("ui", "Error reading message: {}", e);
                             break;
                         }
                     }
@@ -121,7 +123,7 @@ impl IrcUi {
                             }
                         }
                         Err(e) => {
-                            error!("Error reading user input: {}", e);
+                            iron_error!("ui", "Error reading user input: {}", e);
                             break;
                         }
                     }
@@ -147,7 +149,7 @@ impl IrcUi {
     }
 
     async fn handle_irc_message(&mut self, message: IrcMessage) -> Result<()> {
-        debug!("Received IRC message: {} from {:?}", message.command, message.prefix);
+        iron_debug!("ui", "Received IRC message: {} from {:?}", message.command, message.prefix);
 
         match message.command.as_str() {
             "PRIVMSG" => {
@@ -182,7 +184,7 @@ impl IrcUi {
                 }
             }
             "JOIN" => {
-                if let Some(channel) = message.params.get(0) {
+                if let Some(channel) = message.params.first() {
                     let sender = message.prefix.as_ref()
                         .and_then(|s| s.split('!').next())
                         .unwrap_or("unknown");
@@ -211,7 +213,7 @@ impl IrcUi {
                 }
             }
             "PART" => {
-                if let Some(channel) = message.params.get(0) {
+                if let Some(channel) = message.params.first() {
                     let sender = message.prefix.as_ref()
                         .and_then(|s| s.split('!').next())
                         .unwrap_or("unknown");
@@ -291,7 +293,7 @@ impl IrcUi {
 
                 // Forward to client for nickname tracking
                 if let Err(e) = self.client.handle_message(message).await {
-                    error!("Error handling NICK message: {}", e);
+                    iron_error!("ui", "Error handling NICK message: {}", e);
                 }
             }
             "QUIT" => {
@@ -316,17 +318,17 @@ impl IrcUi {
             "PING" | "PONG" | "ERROR" | "433" | "436" => {
                 // Forward protocol messages to client for handling
                 if let Err(e) = self.client.handle_message(message).await {
-                    error!("Error handling protocol message: {}", e);
+                    iron_error!("ui", "Error handling protocol message: {}", e);
                 }
             }
             _ => {
                 // For other messages, handle them and then forward to client
                 // Log unhandled message types for visibility
-                debug!("Unhandled IRC message type: {} with params: {:?}", message.command, message.params);
+                iron_debug!("ui", "Unhandled IRC message type: {} with params: {:?}", message.command, message.params);
                 
                 // Forward to client in case it needs to handle it
                 if let Err(e) = self.client.handle_message(message).await {
-                    error!("Error forwarding message to client: {}", e);
+                    iron_error!("ui", "Error forwarding message to client: {}", e);
                 }
             }
         }
@@ -593,9 +595,6 @@ impl IrcUi {
             }
             MessageType::System => {
                 println!("{} *** {}", timestamp, content);
-            }
-            _ => {
-                println!("{} {} {}", timestamp, channel_prefix, content);
             }
         }
     }

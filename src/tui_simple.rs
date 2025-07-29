@@ -22,7 +22,7 @@ use crossterm::{
 };
 
 use futures::StreamExt;
-use tracing::{debug, info, error};
+use crate::{iron_debug, iron_info, iron_error};
 
 pub struct IrcTui {
     client: IronClient,
@@ -103,7 +103,7 @@ impl IrcTui {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        info!("Starting IronChat TUI");
+        iron_info!("tui_simple", "Starting IronChat TUI");
         self.running = true;
 
         // Connect to IRC
@@ -129,15 +129,15 @@ impl IrcTui {
                     match message_result {
                         Ok(Some(message)) => {
                             if let Err(e) = self.handle_irc_message(message).await {
-                                error!("Error handling IRC message: {}", e);
+                                iron_error!("tui_simple", "Error handling IRC message: {}", e);
                             }
                         }
                         Ok(None) => {
-                            info!("Connection closed by server");
+                            iron_info!("tui_simple", "Connection closed by server");
                             break;
                         }
                         Err(e) => {
-                            error!("Error reading message: {}", e);
+                            iron_error!("tui_simple", "Error reading message: {}", e);
                             break;
                         }
                     }
@@ -148,11 +148,11 @@ impl IrcTui {
                     match maybe_event {
                         Some(Ok(event)) => {
                             if let Err(e) = self.handle_event(event).await {
-                                error!("Error handling event: {}", e);
+                                iron_error!("tui_simple", "Error handling event: {}", e);
                             }
                         }
                         Some(Err(e)) => {
-                            error!("Error reading event: {}", e);
+                            iron_error!("tui_simple", "Error reading event: {}", e);
                         }
                         None => break,
                     }
@@ -535,7 +535,7 @@ impl IrcTui {
     }
 
     async fn handle_irc_message(&mut self, message: IrcMessage) -> Result<()> {
-        debug!("Received IRC message: {} from {:?}", message.command, message.prefix);
+        iron_debug!("tui_simple", "Received IRC message: {} from {:?}", message.command, message.prefix);
 
         match message.command.as_str() {
             "PRIVMSG" => {
@@ -576,7 +576,7 @@ impl IrcTui {
             _ => {
                 // Forward other messages to client
                 if let Err(e) = self.client.handle_message(message).await {
-                    error!("Error forwarding message to client: {}", e);
+                    iron_error!("tui_simple", "Error forwarding message to client: {}", e);
                 }
             }
         }

@@ -1,0 +1,50 @@
+[package]
+name = "ironchat-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3", features = ["derive"] }
+
+[dependencies.ironchat]
+path = ".."
+
+[[bin]]
+name = "fuzz_irc_message_parsing"
+path = "fuzz_targets/fuzz_irc_message_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tag_parsing"
+path = "fuzz_targets/fuzz_tag_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_command_validation"
+path = "fuzz_targets/fuzz_command_validation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_connection_handling"
+path = "fuzz_targets/fuzz_connection_handling.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_parameter_parsing"
+path = "fuzz_targets/fuzz_parameter_parsing.rs"
+test = false
+doc = false
+bench = false

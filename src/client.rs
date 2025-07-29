@@ -3,10 +3,13 @@ use crate::message::IrcMessage;
 use crate::capabilities::CapabilityHandler;
 use crate::auth::SaslAuthenticator;
 use crate::error::{IronError, Result};
+use crate::dos_protection::DosProtection;
+use crate::dos_protection::DosProtectionConfig;
 
 use tokio::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info, warn, error};
+use crate::{iron_debug, iron_info, iron_warn, iron_error};
 use secrecy::SecretString;
 
 #[derive(Debug, Clone)]
@@ -54,6 +57,8 @@ pub struct IronClient {
     connected: bool,
     registered: bool,
     current_nick: String,
+    dos_protection: Option<Arc<DosProtection>>,
+    message_queue_size: usize,
 }
 
 impl IronClient {
@@ -69,6 +74,27 @@ impl IronClient {
             message_rx: Some(rx),
             connected: false,
             registered: false,
+            dos_protection: None,
+            message_queue_size: 0,
+            config,
+        }
+    }
+
+    pub fn new_with_dos_protection(config: IrcConfig, dos_config: DosProtectionConfig) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let dos_protection = Arc::new(DosProtection::new(dos_config));
+        
+        Self {
+            current_nick: config.nickname.clone(),
+            connection: None,
+            cap_handler: CapabilityHandler::new(),
+            sasl_auth: None,
+            message_tx: Some(tx),
+            message_rx: Some(rx),
+            connected: false,
+            registered: false,
+            dos_protection: Some(dos_protection),
+            message_queue_size: 0,
             config,
         }
     }
@@ -95,20 +121,31 @@ impl IronClient {
     }
 
     pub async fn connect(&mut self) -> Result<()> {
-        info!("Connecting to {}:{}", self.config.server, self.config.port);
-
-        let connection = SecureConnection::connect(
-            &self.config.server,
-            self.config.port,
-            self.config.verify_certificates,
-        ).await?;
-
+        iron_info!("client", "🔌 Connecting to {}:{}", self.config.server, self.config.port);
+        
+        println!("\x1b[95m🔐 Establishing TLS connection...\x1b[0m");
+        let connection = if let Some(ref dos) = self.dos_protection {
+            SecureConnection::connect_with_dos_protection(
+                &self.config.server,
+                self.config.port,
+                self.config.verify_certificates,
+                Some(dos.clone()),
+            ).await?
+        } else {
+            SecureConnection::connect(
+                &self.config.server,
+                self.config.port,
+                self.config.verify_certificates,
+            ).await?
+        };
+        
+        println!("\x1b[92m🔒 TLS connection established\x1b[0m");
         self.connection = Some(connection);
         self.connected = true;
 
         self.perform_registration().await?;
 
-        info!("Successfully connected and registered to {}", self.config.server);
+        iron_info!("client", "Successfully connected and registered to {}", self.config.server);
         Ok(())
     }
 
@@ -118,7 +155,7 @@ impl IronClient {
                 .with_params(vec!["IronChat disconnecting".to_string()]);
             
             if let Err(e) = conn.send_message(&quit_msg).await {
-                warn!("Failed to send QUIT message: {}", e);
+                iron_warn!("client", "Failed to send QUIT message: {}", e);
             }
             
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -126,7 +163,7 @@ impl IronClient {
 
         self.connected = false;
         self.registered = false;
-        info!("Disconnected from {}", self.config.server);
+        iron_info!("client", "Disconnected from {}", self.config.server);
         Ok(())
     }
 
@@ -138,7 +175,7 @@ impl IronClient {
         let join_msg = IrcMessage::new("JOIN").with_params(vec![channel.to_string()]);
         self.send_message(&join_msg).await?;
         
-        info!("Joining channel: {}", channel);
+        iron_info!("client", "Joining channel: {}", channel);
         Ok(())
     }
 
@@ -155,7 +192,7 @@ impl IronClient {
         let part_msg = IrcMessage::new("PART").with_params(params);
         self.send_message(&part_msg).await?;
         
-        info!("Parting channel: {}", channel);
+        iron_info!("client", "Parting channel: {}", channel);
         Ok(())
     }
 
@@ -168,7 +205,7 @@ impl IronClient {
             .with_params(vec![target.to_string(), message.to_string()]);
         
         self.send_message(&privmsg).await?;
-        debug!("Sent message to {}: {}", target, message);
+        iron_debug!("client", "Sent message to {}: {}", target, message);
         Ok(())
     }
 
@@ -180,36 +217,77 @@ impl IronClient {
         let mut ping_interval = tokio::time::interval(self.config.ping_timeout);
         ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // Start DoS protection cleanup task
+        let cleanup_task = if let Some(ref dos) = self.dos_protection {
+            let dos_clone = dos.clone();
+            Some(tokio::spawn(async move {
+                let mut cleanup_interval = tokio::time::interval(Duration::from_secs(60));
+                loop {
+                    cleanup_interval.tick().await;
+                    dos_clone.cleanup_expired().await;
+                }
+            }))
+        } else {
+            None
+        };
+
+        let result = self.run_main_loop(ping_interval).await;
+
+        // Cleanup the DoS protection task
+        if let Some(task) = cleanup_task {
+            task.abort();
+        }
+
+        self.connected = false;
+        self.registered = false;
+        result
+    }
+
+    async fn run_main_loop(&mut self, mut ping_interval: tokio::time::Interval) -> Result<()> {
         loop {
             tokio::select! {
                 message_result = self.read_message() => {
                     match message_result {
                         Ok(Some(message)) => {
+                            // Update queue size tracking for DoS protection
+                            self.update_queue_size().await;
+                            
                             if let Err(e) = self.handle_message(message).await {
-                                error!("Error handling message: {}", e);
+                                iron_error!("client", "Error handling message: {}", e);
+                                
+                                // If it's a security violation, we might want to disconnect
+                                if matches!(e, IronError::SecurityViolation(_)) {
+                                    iron_warn!("client", "Security violation detected, disconnecting");
+                                    break;
+                                }
                             }
                         }
                         Ok(None) => {
-                            info!("Connection closed by server");
+                            iron_info!("client", "Connection closed by server");
                             break;
                         }
                         Err(e) => {
-                            error!("Error reading message: {}", e);
+                            iron_error!("client", "Error reading message: {}", e);
+                            
+                            // Handle DoS protection errors gracefully
+                            if matches!(e, IronError::SecurityViolation(_)) {
+                                iron_warn!("client", "DoS protection triggered: {}", e);
+                                // Wait a bit before continuing
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                continue;
+                            }
                             break;
                         }
                     }
                 }
                 _ = ping_interval.tick() => {
                     if let Err(e) = self.send_ping().await {
-                        error!("Failed to send ping: {}", e);
+                        iron_error!("client", "Failed to send ping: {}", e);
                         break;
                     }
                 }
             }
         }
-
-        self.connected = false;
-        self.registered = false;
         Ok(())
     }
 
@@ -225,14 +303,21 @@ impl IronClient {
         &self.current_nick
     }
 
-    async fn perform_registration(&mut self) -> Result<()> {
-        info!("Starting IRC registration");
+    pub fn server_name(&self) -> String {
+        format!("{}:{}", self.config.server, self.config.port)
+    }
 
+    async fn perform_registration(&mut self) -> Result<()> {
+        iron_info!("client", "🎭 Starting IRC registration");
+        
+        println!("\x1b[94m📋 Requesting server capabilities (CAP LS 302)...\x1b[0m");
         self.send_raw("CAP LS 302").await?;
         
+        println!("\x1b[94m👤 Sending nickname: \x1b[93m{}\x1b[0m", self.config.nickname);
         let nick_msg = IrcMessage::new("NICK").with_params(vec![self.config.nickname.clone()]);
         self.send_message(&nick_msg).await?;
 
+        println!("\x1b[94m📝 Sending user info: \x1b[93m{}\x1b[0m", self.config.username);
         let user_msg = IrcMessage::new("USER").with_params(vec![
             self.config.username.clone(),
             "0".to_string(), 
@@ -241,13 +326,13 @@ impl IronClient {
         ]);
         self.send_message(&user_msg).await?;
 
+        println!("\x1b[96m🔧 Negotiating IRCv3 capabilities...\x1b[0m");
         self.negotiate_capabilities().await?;
 
         Ok(())
     }
 
     async fn negotiate_capabilities(&mut self) -> Result<()> {
-        let mut cap_negotiation_complete = false;
         let negotiation_timeout = tokio::time::sleep(Duration::from_secs(30));
         tokio::pin!(negotiation_timeout);
 
@@ -256,17 +341,19 @@ impl IronClient {
                 message_result = self.read_message() => {
                     match message_result {
                         Ok(Some(message)) => {
+                            iron_debug!("client", "📨 Negotiation received: {} {:?}", message.command, message.params);
+                            
                             if self.handle_cap_message(&message).await? {
-                                cap_negotiation_complete = true;
+                                iron_info!("client", "✅ CAP negotiation completed successfully");
                                 break;
                             }
                             
                             if message.command == "001" {
                                 self.registered = true;
-                                self.current_nick = message.params.get(0)
+                                self.current_nick = message.params.first()
                                     .unwrap_or(&self.config.nickname)
                                     .clone();
-                                info!("Successfully registered with nick: {}", self.current_nick);
+                                iron_info!("client", "Successfully registered with nick: {}", self.current_nick);
                                 break;
                             }
                         }
@@ -279,7 +366,7 @@ impl IronClient {
                     }
                 }
                 _ = &mut negotiation_timeout => {
-                    warn!("Capability negotiation timeout, continuing without full capabilities");
+                    iron_warn!("client", "Capability negotiation timeout, continuing without full capabilities");
                     break;
                 }
             }
@@ -289,7 +376,7 @@ impl IronClient {
             return Err(IronError::Connection("Registration failed".to_string()));
         }
 
-        info!("Registration complete. Current nick: {}", self.current_nick);
+        iron_info!("client", "Registration complete. Current nick: {}", self.current_nick);
 
         for channel in &self.config.channels.clone() {
             self.join_channel(channel).await?;
@@ -303,21 +390,29 @@ impl IronClient {
             return Ok(false);
         }
 
+        iron_info!("client", "🔧 Received CAP message: {} {:?}", message.command, message.params);
+
         if message.params.len() < 3 {
+            iron_warn!("client", "❌ CAP message has insufficient parameters: {:?}", message.params);
             return Ok(false);
         }
 
         let subcommand = &message.params[1];
+        iron_info!("client", "🎯 Processing CAP subcommand: {}", subcommand);
         
         match subcommand.as_str() {
             "LS" => {
                 let is_complete = self.cap_handler.handle_cap_ls(&message.params[1..])?;
+                iron_info!("client", "📋 CAP LS processed, complete: {}", is_complete);
                 if is_complete {
                     let caps_to_request = self.cap_handler.get_capabilities_to_request();
+                    iron_info!("client", "🎯 Capabilities to request: {:?}", caps_to_request);
                     if !caps_to_request.is_empty() {
                         let req_msg = format!("CAP REQ :{}", caps_to_request.join(" "));
+                        iron_info!("client", "📤 Sending: {}", req_msg);
                         self.send_raw(&req_msg).await?;
                     } else {
+                        iron_info!("client", "📤 No capabilities to request, sending CAP END");
                         self.send_raw("CAP END").await?;
                         self.cap_handler.set_negotiation_complete();
                         return Ok(true);
@@ -331,7 +426,7 @@ impl IronClient {
                     if let Some(ref sasl_auth) = self.sasl_auth {
                         let mechanisms = self.cap_handler.get_sasl_mechanisms();
                         if let Some(mechanism) = sasl_auth.select_mechanism(&mechanisms) {
-                            warn!("SASL authentication mechanism selected: {:?}", mechanism);
+                            iron_warn!("client", "SASL authentication mechanism selected: {:?}", mechanism);
                             // TODO: Implement proper SASL authentication flow
                             // For now, we'll skip authentication and continue
                         }
@@ -367,38 +462,38 @@ impl IronClient {
     }
 
     pub async fn handle_message(&mut self, message: IrcMessage) -> Result<()> {
-        debug!("Handling message: {}", message.command);
+        iron_debug!("client", "Handling message: {}", message.command);
 
         match message.command.as_str() {
             "PING" => {
                 let pong_msg = IrcMessage::new("PONG")
                     .with_params(message.params);
                 self.send_message(&pong_msg).await?;
-                debug!("Responded to PING");
+                iron_debug!("client", "Responded to PING");
             }
             "001" => {
                 self.registered = true;
-                self.current_nick = message.params.get(0)
+                self.current_nick = message.params.first()
                     .unwrap_or(&self.config.nickname)
                     .clone();
-                info!("Successfully registered with nick: {}", self.current_nick);
+                iron_info!("client", "Successfully registered with nick: {}", self.current_nick);
             }
             "433" | "436" => {
-                warn!("Nickname {} is in use, trying alternative", self.current_nick);
+                iron_warn!("client", "Nickname {} is in use, trying alternative", self.current_nick);
                 self.current_nick = format!("{}_", self.current_nick);
                 let nick_msg = IrcMessage::new("NICK").with_params(vec![self.current_nick.clone()]);
                 self.send_message(&nick_msg).await?;
             }
             "ERROR" => {
                 let default_error = "Unknown error".to_string();
-                let error_msg = message.params.get(0).unwrap_or(&default_error);
-                error!("Server error: {}", error_msg);
-                return Err(IronError::Connection(format!("Server error: {}", error_msg)));
+                let error_msg = message.params.first().unwrap_or(&default_error);
+                iron_error!("client", "Server error: {}", error_msg);
+                return Err(IronError::Connection(format!("Server error: {error_msg}")));
             }
             _ => {
                 if let Some(ref tx) = self.message_tx {
-                    if let Err(_) = tx.send(message) {
-                        warn!("Message channel closed");
+                    if tx.send(message).is_err() {
+                        iron_warn!("client", "Message channel closed");
                     }
                 }
             }
@@ -435,15 +530,53 @@ impl IronClient {
         let ping_msg = IrcMessage::new("PING")
             .with_params(vec![self.config.server.clone()]);
         self.send_message(&ping_msg).await?;
-        debug!("Sent PING to server");
+        iron_debug!("client", "Sent PING to server");
         Ok(())
+    }
+
+    async fn update_queue_size(&mut self) {
+        if let Some(ref rx) = self.message_rx {
+            self.message_queue_size = rx.len();
+            
+            // Update DoS protection with current queue size
+            if let (Some(ref dos), Some(ref conn)) = (&self.dos_protection, &self.connection) {
+                if let Err(e) = dos.update_queue_size(conn.connection_id(), self.message_queue_size).await {
+                    iron_warn!("client", "Failed to update queue size in DoS protection: {}", e);
+                }
+            }
+        }
+    }
+
+    pub fn get_dos_protection_stats(&self) -> Option<String> {
+        if let (Some(ref _dos), Some(ref conn)) = (&self.dos_protection, &self.connection) {
+            // This would return formatted statistics - implementation depends on needs
+            Some(format!("Connection: {}, Queue size: {}", conn.connection_id(), self.message_queue_size))
+        } else {
+            None
+        }
+    }
+
+    pub async fn get_connection_stats(&self) -> Option<crate::dos_protection::ConnectionStats> {
+        if let (Some(ref dos), Some(ref conn)) = (&self.dos_protection, &self.connection) {
+            dos.get_connection_stats(conn.connection_id()).await
+        } else {
+            None
+        }
+    }
+
+    pub async fn get_global_stats(&self) -> Option<crate::dos_protection::GlobalStats> {
+        if let Some(ref dos) = &self.dos_protection {
+            Some(dos.get_global_stats().await)
+        } else {
+            None
+        }
     }
 }
 
 impl Drop for IronClient {
     fn drop(&mut self) {
         if self.connected {
-            warn!("IronClient dropped while still connected");
+            iron_warn!("client", "IronClient dropped while still connected");
         }
     }
 }

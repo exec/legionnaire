@@ -1,16 +1,22 @@
 pub mod client;
 pub mod connection;
+pub mod connection_manager;
+pub mod reliable_client;
 pub mod message;
 pub mod capabilities;
 pub mod auth;
 pub mod error;
+pub mod logger;
 pub mod ui;
 // pub mod tui_simple; // Original with borrow checker issues
 pub mod tui; // New working TUI
 pub mod config;
+pub mod dos_protection;
 
 pub use client::IronClient;
-pub use error::IronError;
+pub use reliable_client::ReliableIronClient;
+pub use error::{IronError, ConnectionState, DisconnectReason};
 pub use ui::IrcUi;
 pub use tui::IrcTui; // Use new working TUI
 pub use config::Config;
+pub use dos_protection::DosProtection;
