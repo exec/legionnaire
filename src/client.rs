@@ -307,6 +307,38 @@ impl IronClient {
         format!("{}:{}", self.config.server, self.config.port)
     }
 
+    pub fn get_enabled_capabilities(&self) -> Vec<String> {
+        // Return a list of enabled IRCv3 capabilities for display
+        let mut caps = Vec::new();
+        
+        if self.cap_handler.is_capability_enabled("sasl") {
+            caps.push("🔐 SASL".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("server-time") {
+            caps.push("⏰ Server-time".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("message-tags") {
+            caps.push("🏷️ Message-tags".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("away-notify") {
+            caps.push("💤 Away-notify".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("account-tag") {
+            caps.push("👤 Account-tag".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("extended-join") {
+            caps.push("🚪 Extended-join".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("multi-prefix") {
+            caps.push("⭐ Multi-prefix".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("sts") {
+            caps.push("🔒 STS".to_string());
+        }
+        
+        caps
+    }
+
     async fn perform_registration(&mut self) -> Result<()> {
         iron_info!("client", "🎭 Starting IRC registration");
         
@@ -423,12 +455,22 @@ impl IronClient {
                 self.cap_handler.handle_cap_ack(&message.params[2..])?;
                 
                 if self.cap_handler.is_capability_enabled("sasl") {
-                    if let Some(ref sasl_auth) = self.sasl_auth {
+                    if let Some(sasl_auth) = self.sasl_auth.clone() {
                         let mechanisms = self.cap_handler.get_sasl_mechanisms();
                         if let Some(mechanism) = sasl_auth.select_mechanism(&mechanisms) {
-                            iron_warn!("client", "SASL authentication mechanism selected: {:?}", mechanism);
-                            // TODO: Implement proper SASL authentication flow
-                            // For now, we'll skip authentication and continue
+                            iron_info!("client", "🔐 SASL authentication mechanism selected: {:?}", mechanism);
+                            
+                            match self.perform_sasl_authentication(&sasl_auth, mechanism).await {
+                                Ok(()) => {
+                                    iron_info!("client", "✅ SASL authentication successful");
+                                }
+                                Err(e) => {
+                                    iron_error!("client", "❌ SASL authentication failed: {}", e);
+                                    return Err(e);
+                                }
+                            }
+                        } else {
+                            iron_warn!("client", "⚠️ No compatible SASL mechanisms available");
                         }
                     }
                 }
@@ -532,6 +574,119 @@ impl IronClient {
         self.send_message(&ping_msg).await?;
         iron_debug!("client", "Sent PING to server");
         Ok(())
+    }
+
+    async fn perform_sasl_authentication(&mut self, _sasl_auth: &SaslAuthenticator, mechanism: &crate::auth::SaslMechanism) -> Result<()> {
+        iron_info!("client", "🔐 Starting SASL authentication with integrated connection");
+        
+        if let Some(ref mut conn) = self.connection {
+            let tls_active = conn.is_tls_active();
+            
+            // Use the connection's send_raw and read_message methods for SASL
+            match mechanism {
+                crate::auth::SaslMechanism::Plain { username, password, authzid } => {
+                    self.authenticate_sasl_plain(username, password, authzid.as_deref(), tls_active).await?;
+                }
+                crate::auth::SaslMechanism::External { authzid } => {
+                    self.authenticate_sasl_external(authzid.as_deref()).await?;
+                }
+                crate::auth::SaslMechanism::ScramSha256 { username: _, password: _ } => {
+                    return Err(IronError::Auth("SCRAM-SHA-256 integration not yet complete".to_string()));
+                }
+            }
+            
+            iron_info!("client", "✅ SASL authentication completed successfully");
+            Ok(())
+        } else {
+            Err(IronError::Connection("Not connected".to_string()))
+        }
+    }
+
+    async fn authenticate_sasl_plain(&mut self, username: &str, password: &secrecy::SecretString, authzid: Option<&str>, tls_active: bool) -> Result<()> {
+        use secrecy::ExposeSecret;
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+        
+        if !tls_active {
+            return Err(IronError::SecurityViolation("PLAIN authentication requires TLS".to_string()));
+        }
+
+        iron_info!("client", "Starting PLAIN authentication for user: {}", username);
+
+        self.send_raw("AUTHENTICATE PLAIN").await?;
+
+        // Wait for server response
+        let response = self.read_message().await?;
+        if let Some(msg) = response {
+            if msg.command != "AUTHENTICATE" || msg.params.get(0) != Some(&"+".to_string()) {
+                return Err(IronError::Auth("Unexpected server response".to_string()));
+            }
+        }
+
+        let authz = authzid.unwrap_or("");
+        let auth_string = format!("{}\0{}\0{}", authz, username, password.expose_secret());
+        let encoded = BASE64.encode(auth_string.as_bytes());
+        
+        self.send_raw(&format!("AUTHENTICATE {}", encoded)).await?;
+
+        // Wait for success/failure
+        self.wait_for_sasl_completion().await
+    }
+
+    async fn authenticate_sasl_external(&mut self, authzid: Option<&str>) -> Result<()> {
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+        
+        iron_info!("client", "Starting EXTERNAL authentication");
+
+        self.send_raw("AUTHENTICATE EXTERNAL").await?;
+
+        // Wait for server response
+        let response = self.read_message().await?;
+        if let Some(msg) = response {
+            if msg.command != "AUTHENTICATE" || msg.params.get(0) != Some(&"+".to_string()) {
+                return Err(IronError::Auth("Unexpected server response".to_string()));
+            }
+        }
+
+        let auth_data = match authzid {
+            Some(authz) => BASE64.encode(authz.as_bytes()),
+            None => "+".to_string(),
+        };
+
+        self.send_raw(&format!("AUTHENTICATE {}", auth_data)).await?;
+
+        // Wait for success/failure
+        self.wait_for_sasl_completion().await
+    }
+
+    async fn wait_for_sasl_completion(&mut self) -> Result<()> {
+        let timeout = tokio::time::sleep(Duration::from_secs(30));
+        tokio::pin!(timeout);
+
+        loop {
+            tokio::select! {
+                message_result = self.read_message() => {
+                    if let Ok(Some(message)) = message_result {
+                        if let Ok(numeric_code) = message.command.parse::<u16>() {
+                            match numeric_code {
+                                900 | 903 => {
+                                    iron_info!("client", "SASL authentication successful");
+                                    return Ok(());
+                                }
+                                902 => return Err(IronError::Auth("Account unavailable".to_string())),
+                                904 => return Err(IronError::Auth("Authentication failed".to_string())),
+                                905 => return Err(IronError::Auth("Message too long".to_string())),
+                                906 => return Err(IronError::Auth("Authentication aborted".to_string())),
+                                907 => return Err(IronError::Auth("Already authenticated".to_string())),
+                                _ => continue,
+                            }
+                        }
+                    }
+                }
+                _ = &mut timeout => {
+                    return Err(IronError::Auth("SASL authentication timeout".to_string()));
+                }
+            }
+        }
     }
 
     async fn update_queue_size(&mut self) {

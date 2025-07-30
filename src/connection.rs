@@ -245,6 +245,17 @@ impl SecureConnection {
     pub fn dos_protection(&self) -> Option<&Arc<DosProtection>> {
         self.dos_protection.as_ref()
     }
+
+    pub fn is_tls_active(&self) -> bool {
+        // Since SecureConnection always uses TLS, this is always true
+        true
+    }
+
+    pub async fn split_for_sasl(&mut self) -> Result<()> {
+        // For now, we'll handle SASL authentication directly through the client
+        // using send_raw and read_message methods instead of splitting the stream
+        Ok(())
+    }
 }
 
 impl Drop for SecureConnection {

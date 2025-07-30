@@ -350,8 +350,8 @@ impl IrcTui {
                             Ok(Some(message)) => {
                                 message_count += 1;
                                 let now = std::time::Instant::now();
-                                let since_last = now.duration_since(last_message_time);
-                                let total_elapsed = now.duration_since(start_time);
+                                let _since_last = now.duration_since(last_message_time);
+                                let _total_elapsed = now.duration_since(start_time);
                                 last_message_time = now;
                                 
                                 // Process message without debug spam
@@ -685,14 +685,28 @@ impl IrcTui {
             let total_messages = channel.messages.len();
             let visible_height = area.height.saturating_sub(2) as usize; // Subtract border height
             
-            // Calculate which messages to show based on scroll
-            let end_index = total_messages.saturating_sub(scroll_offset);
-            let start_index = end_index.saturating_sub(visible_height);
-            
-            channel.messages[start_index..end_index].iter()
-                .map(|msg| Self::format_message(msg))
-                .map(ListItem::new)
-                .collect()
+            if total_messages == 0 {
+                vec![]
+            } else {
+                // Calculate which messages to show based on scroll
+                // scroll_offset = 0 means we're at the bottom (newest messages)
+                // scroll_offset = total_messages means we're at the top (oldest messages)
+                let end_index = total_messages.saturating_sub(scroll_offset);
+                let start_index = if end_index > visible_height {
+                    end_index - visible_height
+                } else {
+                    0  // Show from the beginning if we don't have enough messages
+                };
+                
+                // Ensure we have valid indices
+                let safe_end = end_index.min(total_messages);
+                let safe_start = start_index.min(safe_end);
+                
+                channel.messages[safe_start..safe_end].iter()
+                    .map(|msg| Self::format_message(msg))
+                    .map(ListItem::new)
+                    .collect()
+            }
         } else {
             vec![]
         };
@@ -854,6 +868,13 @@ impl IrcTui {
             Line::from("  /ns <cmd>        - NickServ command"),
             Line::from("  /cs <cmd>        - ChanServ command"),
             Line::from("  /quit [reason]   - Quit IRC"),
+            Line::from(""),
+            Line::from("IRCv3 Features:"),
+            Line::from("  🔐 SASL Authentication"),
+            Line::from("  ⏰ Server-time (precise timestamps)"),
+            Line::from("  🏷️ Message-tags support"),
+            Line::from("  💤 Away-notify (real-time away status)"),
+            Line::from("  🔒 STS (Strict Transport Security)"),
             Line::from(""),
             Line::from("Keys:"),
             Line::from(format!("  {} - Toggle this help", keybindings.toggle_help)),
@@ -1340,6 +1361,72 @@ impl IrcTui {
                         format!("{} left {}{}", sender, channel, reason),
                         MessageType::Part,
                     );
+                }
+            }
+            "AWAY" => {
+                // Handle away-notify capability
+                if let Some(sender) = message.prefix.as_ref()
+                    .and_then(|s| s.split('!').next()) {
+                    
+                    let away_message = message.params.get(0).cloned().unwrap_or_default();
+                    
+                    if away_message.is_empty() {
+                        // User is back
+                        self.add_message(
+                            "Server",
+                            None,
+                            format!("{} is back", sender),
+                            MessageType::System,
+                        );
+                    } else {
+                        // User is away
+                        self.add_message(
+                            "Server",
+                            None,
+                            format!("{} is away: {}", sender, away_message),
+                            MessageType::System,
+                        );
+                    }
+                }
+            }
+            "QUIT" => {
+                if let Some(sender) = message.prefix.as_ref()
+                    .and_then(|s| s.split('!').next()) {
+                    
+                    let reason = message.params.get(0).map(|r| format!(" ({})", r)).unwrap_or_default();
+                    
+                    // Remove user from all channels
+                    for channel_data in self.channels.values_mut() {
+                        channel_data.users.retain(|u| u != sender);
+                    }
+                    
+                    self.add_message(
+                        "Server",
+                        None,
+                        format!("{} quit{}", sender, reason),
+                        MessageType::System,
+                    );
+                }
+            }
+            "NICK" => {
+                if let Some(old_nick) = message.prefix.as_ref()
+                    .and_then(|s| s.split('!').next()) {
+                    
+                    if let Some(new_nick) = message.params.get(0) {
+                        // Update nick in all channels
+                        for channel_data in self.channels.values_mut() {
+                            if let Some(pos) = channel_data.users.iter().position(|u| u == old_nick) {
+                                channel_data.users[pos] = new_nick.clone();
+                            }
+                        }
+                        
+                        self.add_message(
+                            "Server",
+                            None,
+                            format!("{} is now known as {}", old_nick, new_nick),
+                            MessageType::System,
+                        );
+                    }
                 }
             }
             "353" => { // NAMES reply
@@ -1942,11 +2029,11 @@ impl IrcTui {
     fn scroll_up(&mut self) {
         if let Some(channel_name) = self.get_current_channel_name() {
             if let Some(channel) = self.channels.get(&channel_name) {
-                // Calculate the maximum scroll based on visible area
                 let total_messages = channel.messages.len();
                 if total_messages > 0 {
-                    // Allow scrolling up to show the oldest messages
-                    let max_scroll = total_messages;
+                    // We can scroll up to a maximum where we show the first message at the top
+                    // This prevents scrolling beyond the beginning of the message list
+                    let max_scroll = total_messages.saturating_sub(1);
                     self.message_scroll = (self.message_scroll + 10).min(max_scroll);
                 }
             }

@@ -3,7 +3,11 @@ use secrecy::{ExposeSecret, SecretString};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use tokio::io::{AsyncWrite, AsyncBufRead, AsyncWriteExt, AsyncBufReadExt};
 use std::time::Duration;
-use crate::{iron_debug, iron_info, iron_warn, iron_error};
+use crate::{iron_debug, iron_info, iron_error};
+use hmac::{Hmac, Mac};
+use sha2::{Sha256, Digest};
+use pbkdf2::pbkdf2_hmac;
+use rand::Rng;
 
 #[derive(Debug, Clone)]
 pub enum SaslMechanism {
@@ -12,6 +16,7 @@ pub enum SaslMechanism {
     ScramSha256 { username: String, password: SecretString },
 }
 
+#[derive(Clone)]
 pub struct SaslAuthenticator {
     mechanisms: Vec<SaslMechanism>,
     timeout: Duration,
@@ -162,17 +167,151 @@ impl SaslAuthenticator {
 
     async fn authenticate_scram_sha256<W, R>(
         &self,
-        _writer: &mut W,
-        _reader: &mut R,
-        _username: &str,
-        _password: &SecretString,
+        writer: &mut W,
+        reader: &mut R,
+        username: &str,
+        password: &SecretString,
     ) -> Result<()>
     where
         W: AsyncWrite + Unpin,
         R: AsyncBufRead + Unpin,
     {
-        iron_warn!("auth", "SCRAM-SHA-256 not yet implemented, falling back to simpler mechanism");
-        Err(IronError::Auth("SCRAM-SHA-256 not implemented".to_string()))
+        iron_info!("auth", "Starting SCRAM-SHA-256 authentication for user: {}", username);
+
+        // Generate client nonce
+        let client_nonce = self.generate_nonce();
+        let client_first_bare = format!("n={},r={}", username, client_nonce);
+        let client_first_message = format!("n,,{}", client_first_bare);
+
+        writer.write_all(b"AUTHENTICATE SCRAM-SHA-256\r\n").await
+            .map_err(|e| IronError::Io(e))?;
+
+        let server_response = self.read_authenticate_response(reader).await?;
+        if server_response != "+" {
+            return Err(IronError::Auth(
+                format!("Unexpected server response: {}", server_response)
+            ));
+        }
+
+        // Send client first message
+        let encoded_first = BASE64.encode(client_first_message.as_bytes());
+        let chunks = Self::chunk_response(&encoded_first);
+        for chunk in chunks {
+            let command = format!("AUTHENTICATE {}\r\n", chunk);
+            writer.write_all(command.as_bytes()).await
+                .map_err(|e| IronError::Io(e))?;
+        }
+
+        // Read server first message
+        let server_first_response = self.read_authenticate_response(reader).await?;
+        let server_first_decoded = BASE64.decode(server_first_response.as_bytes())
+            .map_err(|_| IronError::Auth("Invalid base64 in server first message".to_string()))?;
+        let server_first = String::from_utf8(server_first_decoded)
+            .map_err(|_| IronError::Auth("Invalid UTF-8 in server first message".to_string()))?;
+
+        iron_debug!("auth", "Server first message: {}", server_first);
+
+        // Parse server first message
+        let (server_nonce, salt, iteration_count) = self.parse_server_first(&server_first)?;
+
+        // Verify server nonce starts with client nonce
+        if !server_nonce.starts_with(&client_nonce) {
+            return Err(IronError::Auth("Server nonce doesn't start with client nonce".to_string()));
+        }
+
+        // Generate client final message without proof
+        let client_final_without_proof = format!("c=biws,r={}", server_nonce);
+        let auth_message = format!("{},{},{}", client_first_bare, server_first, client_final_without_proof);
+
+        // Calculate SCRAM values
+        let salted_password = self.calculate_salted_password(password.expose_secret(), &salt, iteration_count)?;
+        let client_key = self.calculate_hmac(&salted_password, b"Client Key")?;
+        let stored_key = Sha256::digest(&client_key);
+        let client_signature = self.calculate_hmac(&stored_key, auth_message.as_bytes())?;
+        let client_proof = self.xor_bytes(&client_key, &client_signature);
+
+        let client_final_message = format!("{},p={}", client_final_without_proof, BASE64.encode(&client_proof));
+
+        // Send client final message
+        let encoded_final = BASE64.encode(client_final_message.as_bytes());
+        let chunks = Self::chunk_response(&encoded_final);
+        for chunk in chunks {
+            let command = format!("AUTHENTICATE {}\r\n", chunk);
+            writer.write_all(command.as_bytes()).await
+                .map_err(|e| IronError::Io(e))?;
+        }
+
+        // Read server final message and verify
+        let server_final_response = self.read_authenticate_response(reader).await?;
+        let server_final_decoded = BASE64.decode(server_final_response.as_bytes())
+            .map_err(|_| IronError::Auth("Invalid base64 in server final message".to_string()))?;
+        let server_final = String::from_utf8(server_final_decoded)
+            .map_err(|_| IronError::Auth("Invalid UTF-8 in server final message".to_string()))?;
+
+        iron_debug!("auth", "Server final message: {}", server_final);
+
+        // Verify server signature
+        let server_key = self.calculate_hmac(&salted_password, b"Server Key")?;
+        let expected_server_signature = self.calculate_hmac(&server_key, auth_message.as_bytes())?;
+        let expected_server_final = format!("v={}", BASE64.encode(&expected_server_signature));
+
+        if server_final != expected_server_final {
+            return Err(IronError::Auth("Server signature verification failed".to_string()));
+        }
+
+        iron_info!("auth", "SCRAM-SHA-256 authentication successful");
+        Ok(())
+    }
+
+    fn generate_nonce(&self) -> String {
+        let mut rng = rand::thread_rng();
+        let nonce_bytes: Vec<u8> = (0..24).map(|_| rng.gen()).collect();
+        BASE64.encode(&nonce_bytes)
+    }
+
+    fn parse_server_first(&self, server_first: &str) -> Result<(String, Vec<u8>, u32)> {
+        let mut server_nonce = None;
+        let mut salt = None;
+        let mut iteration_count = None;
+
+        for part in server_first.split(',') {
+            if let Some(value) = part.strip_prefix("r=") {
+                server_nonce = Some(value.to_string());
+            } else if let Some(value) = part.strip_prefix("s=") {
+                salt = Some(BASE64.decode(value.as_bytes())
+                    .map_err(|_| IronError::Auth("Invalid salt encoding".to_string()))?);
+            } else if let Some(value) = part.strip_prefix("i=") {
+                iteration_count = Some(value.parse()
+                    .map_err(|_| IronError::Auth("Invalid iteration count".to_string()))?);
+            }
+        }
+
+        let server_nonce = server_nonce.ok_or_else(|| IronError::Auth("Missing server nonce".to_string()))?;
+        let salt = salt.ok_or_else(|| IronError::Auth("Missing salt".to_string()))?;
+        let iteration_count = iteration_count.ok_or_else(|| IronError::Auth("Missing iteration count".to_string()))?;
+
+        if iteration_count < 4096 {
+            return Err(IronError::Auth("Iteration count too low (minimum 4096)".to_string()));
+        }
+
+        Ok((server_nonce, salt, iteration_count))
+    }
+
+    fn calculate_salted_password(&self, password: &str, salt: &[u8], iterations: u32) -> Result<Vec<u8>> {
+        let mut output = vec![0u8; 32]; // SHA-256 output size
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iterations, &mut output);
+        Ok(output)
+    }
+
+    fn calculate_hmac(&self, key: &[u8], message: &[u8]) -> Result<Vec<u8>> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(key)
+            .map_err(|_| IronError::Auth("Invalid HMAC key".to_string()))?;
+        mac.update(message);
+        Ok(mac.finalize().into_bytes().to_vec())
+    }
+
+    fn xor_bytes(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
+        a.iter().zip(b.iter()).map(|(x, y)| x ^ y).collect()
     }
 
     async fn read_authenticate_response<R>(&self, reader: &mut R) -> Result<String>

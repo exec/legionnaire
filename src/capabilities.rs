@@ -253,6 +253,9 @@ impl CapabilityHandler {
             "server-time",
             "batch",
             "cap-notify",
+            "away-notify",
+            "extended-join",
+            "multi-prefix",
         ]
     }
 

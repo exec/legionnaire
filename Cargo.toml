@@ -34,6 +34,9 @@ rand = "0.8"
 signal-hook = "0.3"
 signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 regex = "1.10"
+sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", features = ["simple"] }
 
 [[example]]
 name = "reliable_client_demo"
