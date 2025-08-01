@@ -424,7 +424,7 @@ impl IronClient {
 
         iron_info!("client", "🔧 Received CAP message: {} {:?}", message.command, message.params);
 
-        if message.params.len() < 3 {
+        if message.params.len() < 2 {
             iron_warn!("client", "❌ CAP message has insufficient parameters: {:?}", message.params);
             return Ok(false);
         }
@@ -452,7 +452,11 @@ impl IronClient {
                 }
             }
             "ACK" => {
-                self.cap_handler.handle_cap_ack(&message.params[2..])?;
+                if message.params.len() >= 3 {
+                    self.cap_handler.handle_cap_ack(&message.params[2..])?;
+                } else {
+                    iron_warn!("client", "CAP ACK missing capability list");
+                }
                 
                 if self.cap_handler.is_capability_enabled("sasl") {
                     if let Some(sasl_auth) = self.sasl_auth.clone() {
@@ -480,7 +484,11 @@ impl IronClient {
                 return Ok(false);
             }
             "NAK" => {
-                self.cap_handler.handle_cap_nak(&message.params[2..])?;
+                if message.params.len() >= 3 {
+                    self.cap_handler.handle_cap_nak(&message.params[2..])?;
+                } else {
+                    iron_warn!("client", "CAP NAK missing capability list");
+                }
                 self.send_raw("CAP END").await?;
                 self.cap_handler.set_negotiation_complete();
                 return Ok(false);
@@ -495,7 +503,11 @@ impl IronClient {
                 }
             }
             "DEL" => {
-                self.cap_handler.handle_cap_del(&message.params[2..])?;
+                if message.params.len() >= 3 {
+                    self.cap_handler.handle_cap_del(&message.params[2..])?;
+                } else {
+                    iron_warn!("client", "CAP DEL missing capability list");
+                }
             }
             _ => {}
         }

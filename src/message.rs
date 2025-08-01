@@ -85,6 +85,13 @@ impl IrcMessage {
                     "Invalid characters in parameter".to_string()
                 ));
             }
+            
+            // Validate that parameters contain only ASCII characters
+            if !param.is_ascii() {
+                return Err(IronError::SecurityViolation(
+                    "Non-ASCII characters in parameter".to_string()
+                ));
+            }
         }
 
         if let Some(prefix) = &self.prefix {
@@ -128,6 +135,14 @@ impl FromStr for IrcMessage {
                 .ok_or_else(|| IronError::Parse("No space after tags".to_string()))?;
             
             let tag_str = &remaining[1..space_pos];
+            
+            // Check total tag length before parsing
+            if tag_str.len() > MAX_TAG_LENGTH {
+                return Err(IronError::SecurityViolation(
+                    "Tag section exceeds maximum length".to_string()
+                ));
+            }
+            
             remaining = &remaining[space_pos + 1..];
 
             for tag in tag_str.split(';') {
@@ -162,7 +177,15 @@ impl FromStr for IrcMessage {
             let space_pos = remaining.find(' ')
                 .ok_or_else(|| IronError::Parse("No space after prefix".to_string()))?;
             
-            message.prefix = Some(remaining[1..space_pos].to_string());
+            let prefix = &remaining[1..space_pos];
+            // Validate prefix doesn't contain spaces
+            if prefix.contains(' ') {
+                return Err(IronError::SecurityViolation(
+                    "Space in prefix".to_string()
+                ));
+            }
+            
+            message.prefix = Some(prefix.to_string());
             remaining = &remaining[space_pos + 1..];
         }
 
@@ -265,8 +288,25 @@ fn is_valid_command(command: &str) -> bool {
         return false;
     }
 
-    command.chars().all(|c| c.is_ascii_alphanumeric()) ||
-    command.chars().all(|c| c.is_ascii_digit()) && command.len() == 3
+    // Valid IRC commands are either:
+    // 1. Alphabetic commands (PRIVMSG, NOTICE, etc.)
+    // 2. Three-digit numeric replies (001, 372, etc.)
+    let is_alpha_command = command.chars().all(|c| c.is_ascii_alphabetic());
+    let is_numeric_reply = command.len() == 3 && command.chars().all(|c| c.is_ascii_digit());
+    
+    if !is_alpha_command && !is_numeric_reply {
+        return false;
+    }
+    
+    // Reject known non-IRC protocols
+    const INVALID_COMMANDS: &[&str] = &[
+        "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", // HTTP
+        "HELO", "EHLO", "MAIL", "RCPT", "DATA", "RSET", "VRFY", // SMTP
+        "SYST", "STAT", "RETR", "DELE", "UIDL", "APOP", // POP3
+        "AUTH", "LOGIN", "SELECT", "EXAMINE", "CREATE", "RENAME", // IMAP
+    ];
+    
+    !INVALID_COMMANDS.contains(&command)
 }
 
 #[cfg(test)]
