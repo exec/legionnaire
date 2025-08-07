@@ -1,5 +1,5 @@
 use crate::connection::SecureConnection;
-use crate::message::IrcMessage;
+use iron_protocol::IrcMessage;
 use crate::error::{IronError, Result, ConnectionState, DisconnectReason};
 use crate::client::IrcConfig;
 

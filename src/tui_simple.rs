@@ -1,5 +1,5 @@
 use crate::client::IronClient;
-use crate::message::IrcMessage;
+use iron_protocol::IrcMessage;
 use crate::error::Result;
 
 use std::collections::HashMap;
@@ -231,7 +231,8 @@ impl IrcTui {
             .collect();
 
         let tabs = Tabs::new(titles)
-            .block(Block::default().borders(Borders::ALL).title("Channels"))
+            .block(Block::default().borders(Borders::ALL).title("Channels")
+                .border_style(Style::default().fg(Color::DarkGray)))
             .style(Style::default().fg(Color::White))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
             .select(self.current_tab);
@@ -261,7 +262,8 @@ impl IrcTui {
         };
 
         let messages_list = List::new(messages)
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(Block::default().borders(Borders::ALL).title(title)
+                .border_style(Style::default().fg(Color::DarkGray)))
             .style(Style::default().fg(Color::White));
 
         f.render_widget(messages_list, area);
@@ -279,7 +281,8 @@ impl IrcTui {
         };
 
         let users_list = List::new(users)
-            .block(Block::default().borders(Borders::ALL).title("Users"))
+            .block(Block::default().borders(Borders::ALL).title("Users")
+                .border_style(Style::default().fg(Color::DarkGray)))
             .style(Style::default().fg(Color::White));
 
         f.render_widget(users_list, area);
@@ -288,7 +291,8 @@ impl IrcTui {
     fn draw_input(&self, f: &mut Frame, area: Rect) {
         let input = Paragraph::new(self.input.as_str())
             .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Input"));
+            .block(Block::default().borders(Borders::ALL).title("Input")
+                .border_style(Style::default().fg(Color::DarkGray)));
         
         f.render_widget(input, area);
 
@@ -329,7 +333,8 @@ impl IrcTui {
         ];
 
         let help = Paragraph::new(help_text)
-            .block(Block::default().title("Help").borders(Borders::ALL))
+            .block(Block::default().title("Help").borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)))
             .style(Style::default().bg(Color::Black))
             .wrap(Wrap { trim: true });
 

@@ -1,8 +1,7 @@
-use crate::connection::SecureConnection;
-use crate::message::IrcMessage;
-use crate::capabilities::CapabilityHandler;
-use crate::auth::SaslAuthenticator;
+use crate::connection::Connection;
 use crate::error::{IronError, Result};
+use iron_protocol::{IrcMessage, CapabilityHandler};
+use crate::auth::SaslAuthenticator;
 use crate::dos_protection::DosProtection;
 use crate::dos_protection::DosProtectionConfig;
 
@@ -49,7 +48,7 @@ impl Default for IrcConfig {
 
 pub struct IronClient {
     config: IrcConfig,
-    connection: Option<SecureConnection>,
+    connection: Option<Connection>,
     cap_handler: CapabilityHandler,
     sasl_auth: Option<SaslAuthenticator>,
     message_tx: Option<mpsc::UnboundedSender<IrcMessage>>,
@@ -59,6 +58,8 @@ pub struct IronClient {
     current_nick: String,
     dos_protection: Option<Arc<DosProtection>>,
     message_queue_size: usize,
+    // Auto-join channels (delayed until TUI is ready)
+    pending_auto_join: Vec<String>,
 }
 
 impl IronClient {
@@ -76,6 +77,7 @@ impl IronClient {
             registered: false,
             dos_protection: None,
             message_queue_size: 0,
+            pending_auto_join: Vec::new(),
             config,
         }
     }
@@ -95,6 +97,7 @@ impl IronClient {
             registered: false,
             dos_protection: Some(dos_protection),
             message_queue_size: 0,
+            pending_auto_join: Vec::new(),
             config,
         }
     }
@@ -123,23 +126,35 @@ impl IronClient {
     pub async fn connect(&mut self) -> Result<()> {
         iron_info!("client", "🔌 Connecting to {}:{}", self.config.server, self.config.port);
         
-        println!("\x1b[95m🔐 Establishing TLS connection...\x1b[0m");
+        if self.config.tls_required {
+            println!("\x1b[95m🔐 Establishing TLS connection...\x1b[0m");
+        } else {
+            println!("\x1b[93m🔗 Establishing plain connection...\x1b[0m");
+        }
+        
         let connection = if let Some(ref dos) = self.dos_protection {
-            SecureConnection::connect_with_dos_protection(
+            Connection::connect_with_dos_protection(
                 &self.config.server,
                 self.config.port,
+                self.config.tls_required,
                 self.config.verify_certificates,
                 Some(dos.clone()),
             ).await?
         } else {
-            SecureConnection::connect(
+            Connection::connect(
                 &self.config.server,
                 self.config.port,
+                self.config.tls_required,
                 self.config.verify_certificates,
             ).await?
         };
         
-        println!("\x1b[92m🔒 TLS connection established\x1b[0m");
+        if self.config.tls_required {
+            println!("\x1b[92m🔒 TLS connection established\x1b[0m");
+        } else {
+            println!("\x1b[92m✅ Plain connection established\x1b[0m");
+        }
+        
         self.connection = Some(connection);
         self.connected = true;
 
@@ -302,6 +317,19 @@ impl IronClient {
     pub fn current_nickname(&self) -> &str {
         &self.current_nick
     }
+    
+    pub fn get_config(&self) -> &IrcConfig {
+        &self.config
+    }
+    
+    pub fn has_capability(&self, capability: &str) -> bool {
+        self.cap_handler.is_capability_enabled(capability)
+    }
+
+    // Get pending auto-join channels and clear the list
+    pub fn get_pending_auto_join(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_auto_join)
+    }
 
     pub fn server_name(&self) -> String {
         format!("{}:{}", self.config.server, self.config.port)
@@ -339,6 +367,46 @@ impl IronClient {
         caps
     }
 
+    pub fn is_capability_enabled(&self, capability: &str) -> bool {
+        self.cap_handler.is_capability_enabled(capability)
+    }
+
+    /// Request chat history using IRCv3 CHATHISTORY capability
+    pub async fn request_chat_history(
+        &mut self,
+        subcommand: &str,
+        target: &str,
+        selector: &str,
+        limit: usize,
+    ) -> Result<()> {
+        if !self.has_capability("chathistory") {
+            return Err(IronError::Connection("Server does not support CHATHISTORY".to_string()));
+        }
+
+        let command = format!("CHATHISTORY {} {} {} {}", subcommand, target, selector, limit);
+        self.send_raw(&command).await
+    }
+
+    /// Request recent message history for a channel
+    pub async fn request_recent_history(&mut self, channel: &str, limit: usize) -> Result<()> {
+        self.request_chat_history("LATEST", channel, "*", limit).await
+    }
+
+    /// Request message history before a specific message ID or timestamp
+    pub async fn request_history_before(&mut self, channel: &str, selector: &str, limit: usize) -> Result<()> {
+        self.request_chat_history("BEFORE", channel, selector, limit).await
+    }
+
+    /// Request message history after a specific message ID or timestamp  
+    pub async fn request_history_after(&mut self, channel: &str, selector: &str, limit: usize) -> Result<()> {
+        self.request_chat_history("AFTER", channel, selector, limit).await
+    }
+
+    /// Request conversation targets (list of channels/DMs with history)
+    pub async fn request_history_targets(&mut self, limit: usize) -> Result<()> {
+        self.request_chat_history("TARGETS", "*", "*", limit).await
+    }
+
     async fn perform_registration(&mut self) -> Result<()> {
         iron_info!("client", "🎭 Starting IRC registration");
         
@@ -365,34 +433,65 @@ impl IronClient {
     }
 
     async fn negotiate_capabilities(&mut self) -> Result<()> {
-        let negotiation_timeout = tokio::time::sleep(Duration::from_secs(30));
+        // Use a more aggressive timeout for testing
+        let timeout_duration = Duration::from_secs(10); // Much shorter for testing
+        let negotiation_timeout = tokio::time::sleep(timeout_duration);
         tokio::pin!(negotiation_timeout);
+        
+        iron_info!("client", "🚀 Starting capability negotiation with {}s timeout", timeout_duration.as_secs());
 
         loop {
             tokio::select! {
                 message_result = self.read_message() => {
                     match message_result {
                         Ok(Some(message)) => {
-                            iron_debug!("client", "📨 Negotiation received: {} {:?}", message.command, message.params);
+                            iron_info!("client", "📨 Negotiation received: {} {:?}", message.command, message.params);
                             
                             if self.handle_cap_message(&message).await? {
                                 iron_info!("client", "✅ CAP negotiation completed successfully");
                                 break;
                             }
                             
+                            // Check for numeric 001 (RPL_WELCOME)
                             if message.command == "001" {
+                                iron_info!("client", "🎉 Received 001 Welcome message!");
                                 self.registered = true;
                                 self.current_nick = message.params.first()
                                     .unwrap_or(&self.config.nickname)
                                     .clone();
-                                iron_info!("client", "Successfully registered with nick: {}", self.current_nick);
+                                iron_info!("client", "✅ Successfully registered with nick: {}", self.current_nick);
+                                iron_info!("client", "📊 Registration flag set to: {}", self.registered);
+                                
+                                // FIXED: Don't sleep here - let the server send remaining messages
+                                // We'll handle them in a separate phase
+                                iron_info!("client", "🔚 Breaking from negotiation loop after 001");
                                 break;
+                            }
+                            
+                            // Handle other numeric responses during registration
+                            if message.command.chars().all(|c| c.is_ascii_digit()) {
+                                let code: u16 = message.command.parse().unwrap_or(0);
+                                match code {
+                                    002..=005 => {
+                                        iron_debug!("client", "📋 Received registration message: {}", message.command);
+                                        // Continue processing, these are expected
+                                    }
+                                    422 => {
+                                        iron_debug!("client", "📋 Received MOTD message: {}", message.command);
+                                        // MOTD related, continue
+                                    }
+                                    _ => {
+                                        iron_debug!("client", "📋 Received numeric: {}", message.command);
+                                    }
+                                }
                             }
                         }
                         Ok(None) => {
+                            iron_error!("client", "❌ Connection closed during negotiation");
                             return Err(IronError::Connection("Connection closed during registration".to_string()));
                         }
                         Err(e) => {
+                            iron_error!("client", "❌ Error reading message during negotiation: {}", e);
                             return Err(e);
                         }
                     }
@@ -404,15 +503,61 @@ impl IronClient {
             }
         }
 
+        iron_info!("client", "🔍 Checking registration status: registered={}", self.registered);
         if !self.registered {
+            iron_error!("client", "❌ Registration check failed - registered flag is false");
             return Err(IronError::Connection("Registration failed".to_string()));
         }
 
-        iron_info!("client", "Registration complete. Current nick: {}", self.current_nick);
-
-        for channel in &self.config.channels.clone() {
-            self.join_channel(channel).await?;
+        // FIXED: Drain any remaining registration messages to prevent race conditions
+        iron_info!("client", "🔄 Draining remaining registration messages...");
+        let drain_timeout = tokio::time::sleep(Duration::from_millis(500));
+        tokio::pin!(drain_timeout);
+        
+        let mut drained_count = 0;
+        loop {
+            tokio::select! {
+                message_result = self.read_message() => {
+                    match message_result {
+                        Ok(Some(message)) => {
+                            drained_count += 1;
+                            iron_debug!("client", "📦 Drained message {}: {} {:?}", drained_count, message.command, message.params);
+                            
+                            // Stop draining if we get a non-registration message
+                            if !message.command.chars().all(|c| c.is_ascii_digit()) && 
+                               message.command != "NOTICE" && message.command != "PRIVMSG" {
+                                iron_debug!("client", "🛑 Stopping drain on non-registration message: {}", message.command);
+                                break;
+                            }
+                            
+                            // Prevent infinite drain
+                            if drained_count >= 10 {
+                                iron_debug!("client", "🛑 Stopping drain after {} messages", drained_count);
+                                break;
+                            }
+                        }
+                        Ok(None) => {
+                            iron_debug!("client", "📡 Connection closed during message drain");
+                            break;
+                        }
+                        Err(_) => {
+                            iron_debug!("client", "❌ Error during message drain, stopping");
+                            break;
+                        }
+                    }
+                }
+                _ = &mut drain_timeout => {
+                    iron_debug!("client", "⏰ Message drain timeout reached, continuing");
+                    break;
+                }
+            }
         }
+        
+        iron_info!("client", "✅ Registration complete. Current nick: {} (drained {} messages)", self.current_nick, drained_count);
+
+        // Store auto-join channels for later processing by TUI (to avoid timing issues)
+        self.pending_auto_join = self.config.channels.clone();
+        iron_debug!("client", "Stored {} channels for delayed auto-join", self.pending_auto_join.len());
 
         Ok(())
     }
@@ -443,6 +588,7 @@ impl IronClient {
                         let req_msg = format!("CAP REQ :{}", caps_to_request.join(" "));
                         iron_info!("client", "📤 Sending: {}", req_msg);
                         self.send_raw(&req_msg).await?;
+                        // Note: We'll wait for CAP ACK/NAK in the main negotiation loop
                     } else {
                         iron_info!("client", "📤 No capabilities to request, sending CAP END");
                         self.send_raw("CAP END").await?;
@@ -452,8 +598,10 @@ impl IronClient {
                 }
             }
             "ACK" => {
+                iron_info!("client", "✅ Received CAP ACK");
                 if message.params.len() >= 3 {
                     self.cap_handler.handle_cap_ack(&message.params[2..])?;
+                    iron_info!("client", "✅ CAP ACK processed successfully");
                 } else {
                     iron_warn!("client", "CAP ACK missing capability list");
                 }
@@ -479,19 +627,22 @@ impl IronClient {
                     }
                 }
                 
+                iron_info!("client", "📤 Sending CAP END to complete negotiation");
                 self.send_raw("CAP END").await?;
                 self.cap_handler.set_negotiation_complete();
-                return Ok(false);
+                return Ok(false); // FIXED: Continue waiting for 001 Welcome
             }
             "NAK" => {
+                iron_info!("client", "❌ Received CAP NAK");
                 if message.params.len() >= 3 {
                     self.cap_handler.handle_cap_nak(&message.params[2..])?;
                 } else {
                     iron_warn!("client", "CAP NAK missing capability list");
                 }
+                iron_info!("client", "📤 Sending CAP END after NAK");
                 self.send_raw("CAP END").await?;
                 self.cap_handler.set_negotiation_complete();
-                return Ok(false);
+                return Ok(false); // FIXED: Continue waiting for 001 Welcome
             }
             "NEW" => {
                 if message.params.len() > 2 {

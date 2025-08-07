@@ -546,6 +546,149 @@ async fn test_property_based_integration() {
     assert_eq!(config.user.nickname, deserialized.user.nickname);
 }
 
+// Integration test for IRCv3 MessageReply and MessageReaction functionality
+#[cfg(feature = "bleeding-edge")]
+#[tokio::test]
+async fn test_ircv3_reply_react_integration() {
+    use iron_protocol::{MessageReply, MessageReaction, ReactionAction};
+    
+    // Test 1: MessageReply creation and parsing
+    let reply = MessageReply::new(
+        "#rust".to_string(),
+        "msg-12345".to_string(), 
+        "@alice Thanks for the help!".to_string()
+    );
+    
+    let reply_msg = reply.to_message();
+    
+    // Verify reply message structure
+    assert_eq!(reply_msg.command, "PRIVMSG");
+    assert_eq!(reply_msg.params, vec!["#rust", "@alice Thanks for the help!"]);
+    assert!(reply_msg.has_tag("+draft/reply"));
+    assert_eq!(reply_msg.get_tag("+draft/reply"), Some(&Some("msg-12345".to_string())));
+    
+    // Test round-trip parsing
+    let reply_str = reply_msg.to_string();
+    let parsed_msg = reply_str.parse::<iron_protocol::IrcMessage>().unwrap();
+    
+    let parsed_reply = MessageReply::from_message(&parsed_msg).unwrap();
+    assert_eq!(parsed_reply.target, "#rust");
+    assert_eq!(parsed_reply.msgid, "msg-12345");
+    assert_eq!(parsed_reply.reply_text, "@alice Thanks for the help!");
+    
+    // Test 2: MessageReaction creation and parsing
+    let reaction = MessageReaction::new(
+        "#rust".to_string(),
+        "msg-12345".to_string(),
+        "👍".to_string(),
+        ReactionAction::Add
+    );
+    
+    let reaction_msg = reaction.to_message();
+    
+    // Verify reaction message structure
+    assert_eq!(reaction_msg.command, "TAGMSG");
+    assert_eq!(reaction_msg.params, vec!["#rust"]);
+    assert!(reaction_msg.has_tag("+draft/react"));
+    assert!(reaction_msg.has_tag("+draft/reply"));
+    assert_eq!(reaction_msg.get_tag("+draft/react"), Some(&Some("+👍".to_string())));
+    assert_eq!(reaction_msg.get_tag("+draft/reply"), Some(&Some("msg-12345".to_string())));
+    
+    // Test round-trip parsing
+    let reaction_str = reaction_msg.to_string();
+    let parsed_reaction_msg = reaction_str.parse::<iron_protocol::IrcMessage>().unwrap();
+    
+    let parsed_reaction = MessageReaction::from_message(&parsed_reaction_msg).unwrap();
+    assert_eq!(parsed_reaction.target, "#rust");
+    assert_eq!(parsed_reaction.msgid, "msg-12345");
+    assert_eq!(parsed_reaction.reaction, "👍");
+    assert_eq!(parsed_reaction.action, ReactionAction::Add);
+    
+    // Test 3: Complex IRCv3 message parsing with multiple tags
+    let complex_msg_str = r#"@msgid=abc123;time=2024-01-01T12:00:00.000Z;+draft/reply=original456 PRIVMSG #rust :@bob This is a threaded reply with timestamp"#;
+    let complex_msg = complex_msg_str.parse::<iron_protocol::IrcMessage>().unwrap();
+    
+    // Verify all tags are parsed correctly
+    assert!(complex_msg.has_tag("msgid"));
+    assert!(complex_msg.has_tag("time"));
+    assert!(complex_msg.has_tag("+draft/reply"));
+    
+    assert_eq!(complex_msg.get_msgid(), Some("abc123"));
+    assert_eq!(complex_msg.get_tag("time"), Some(&Some("2024-01-01T12:00:00.000Z".to_string())));
+    assert_eq!(complex_msg.get_tag("+draft/reply"), Some(&Some("original456".to_string())));
+    
+    // Test that it can be parsed as a MessageReply
+    let complex_reply = MessageReply::from_message(&complex_msg).unwrap();
+    assert_eq!(complex_reply.target, "#rust");
+    assert_eq!(complex_reply.msgid, "original456");
+    assert_eq!(complex_reply.reply_text, "@bob This is a threaded reply with timestamp");
+    
+    // Test 4: Error handling for invalid IRCv3 messages
+    let invalid_messages = vec![
+        "@+draft/reply= PRIVMSG #rust :Empty reply tag",
+        "TAGMSG #rust", // No reaction tag
+        "@+draft/react=invalid TAGMSG #rust", // Invalid reaction format
+    ];
+    
+    for invalid_msg in invalid_messages {
+        let parsed = invalid_msg.parse::<iron_protocol::IrcMessage>().unwrap();
+        
+        // Should fail to parse as reply/reaction due to invalid format
+        if parsed.has_tag("+draft/reply") {
+            assert!(MessageReply::from_message(&parsed).is_err());
+        }
+        if parsed.has_tag("+draft/react") {
+            assert!(MessageReaction::from_message(&parsed).is_err());
+        }
+    }
+    
+    println!("✓ IRCv3 reply/reaction functionality working correctly");
+}
+
+// Integration test for IRCv3 tag parsing edge cases
+#[cfg(feature = "bleeding-edge")]
+#[tokio::test]
+async fn test_ircv3_tag_parsing_edge_cases() {
+    // Test various IRCv3 tag formats and edge cases
+    let test_cases = vec![
+        // Basic tags
+        ("@simple=value PRIVMSG #test :msg", vec![("simple", Some("value"))]),
+        
+        // Tags with no value
+        ("@flag PRIVMSG #test :msg", vec![("flag", None)]),
+        
+        // Multiple tags
+        ("@tag1=val1;tag2=val2 PRIVMSG #test :msg", vec![("tag1", Some("val1")), ("tag2", Some("val2"))]),
+        
+        // Draft capabilities
+        ("@+draft/reply=msg123;+draft/react=+👍 TAGMSG #test", vec![("+draft/reply", Some("msg123")), ("+draft/react", Some("+👍"))]),
+        
+        // Mixed standard and draft tags
+        ("@msgid=abc;+draft/reply=def;time=2024-01-01T00:00:00.000Z PRIVMSG #test :msg", 
+         vec![("msgid", Some("abc")), ("+draft/reply", Some("def")), ("time", Some("2024-01-01T00:00:00.000Z"))]),
+        
+        // Empty tag value
+        ("@key= PRIVMSG #test :msg", vec![("key", Some(""))]),
+    ];
+    
+    for (msg_str, expected_tags) in test_cases {
+        let parsed = msg_str.parse::<iron_protocol::IrcMessage>().unwrap();
+        
+        // Check that all expected tags are present
+        for (key, expected_value) in expected_tags {
+            assert!(parsed.has_tag(key), "Missing tag: {}", key);
+            let actual_value = parsed.get_tag(key).unwrap();
+            match (expected_value, actual_value) {
+                (Some(exp), Some(act)) => assert_eq!(exp, act, "Tag value mismatch for {}", key),
+                (None, None) => {}, // Both None, good
+                _ => panic!("Tag value presence mismatch for {}: expected {:?}, got {:?}", key, expected_value, actual_value),
+            }
+        }
+    }
+    
+    println!("✓ IRCv3 tag parsing edge cases handled correctly");
+}
+
 // Performance integration test
 #[tokio::test]
 async fn test_performance_integration() {

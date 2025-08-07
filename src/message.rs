@@ -74,7 +74,14 @@ impl IrcMessage {
         }
 
         for param in &self.params {
-            if param.len() > MAX_MESSAGE_LENGTH {
+            // CAP messages can have very long capability lists, allow up to 4KB for them
+            let max_param_len = if self.command == "CAP" {
+                4096
+            } else {
+                MAX_MESSAGE_LENGTH
+            };
+            
+            if param.len() > max_param_len {
                 return Err(IronError::SecurityViolation(
                     "Parameter too long".to_string()
                 ));

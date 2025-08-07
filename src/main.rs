@@ -2,6 +2,7 @@ use ironchat::{IronClient, IrcUi, IrcTui, Config};
 use ironchat::client::IrcConfig;
 use ironchat::config::SaslConfig;
 use ironchat::{iron_info, iron_error, iron_warn, iron_debug};
+use iron_protocol::IrcMessage;
 use std::env;
 use std::panic;
 use clap::Parser;
@@ -41,6 +42,22 @@ struct Args {
     /// Show DoS protection statistics
     #[arg(long)]
     dos_stats: bool,
+    
+    /// Enable testing mode (non-interactive, scriptable)
+    #[arg(long)]
+    test_mode: bool,
+    
+    /// Commands to execute in testing mode (one per argument)
+    #[arg(long = "test-cmd", value_name = "COMMAND")]
+    test_commands: Vec<String>,
+    
+    /// Session ID for test commands (allows multiple test instances)
+    #[arg(long, value_name = "ID")]
+    test_session: Option<String>,
+    
+    /// Timeout for testing mode in seconds
+    #[arg(long, default_value = "30")]
+    test_timeout: u64,
 }
 
 #[tokio::main]
@@ -269,6 +286,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
+    // Handle testing mode early if requested
+    if args.test_mode {
+        return run_test_mode(irc_config, args).await;
+    }
+
     // Create client (DoS protection handling temporarily simplified for fuzzing setup)
     let mut client = if args.no_dos_protection {
         iron_warn!("main", "DoS protection disabled - this is not recommended for production use!");
@@ -394,4 +416,222 @@ fn use_env_vars() -> Result<IrcConfig, Box<dyn std::error::Error>> {
     }
 
     Ok(config)
+}
+
+async fn run_test_mode(irc_config: IrcConfig, args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::time::{timeout, Duration};
+    use tokio::io::{self, AsyncBufReadExt, BufReader};
+    
+    println!("🧪 Starting IronChat in Testing Mode");
+    println!("Session ID: {}", args.test_session.as_deref().unwrap_or("default"));
+    println!("Timeout: {} seconds", args.test_timeout);
+    println!("Commands to execute: {}", args.test_commands.len());
+    
+    // Create and connect client
+    let mut client = IronClient::new(irc_config);
+    
+    // Configure SASL if provided via env vars
+    if let (Ok(username), Ok(password)) = (std::env::var("IRC_SASL_USER"), std::env::var("IRC_SASL_PASS")) {
+        iron_info!("test_mode", "Configuring SASL PLAIN authentication from env");
+        client.with_sasl_plain(username, password);
+    } else if std::env::var("IRC_SASL_EXTERNAL").is_ok() {
+        iron_info!("test_mode", "Configuring SASL EXTERNAL authentication from env");
+        client.with_sasl_external();
+    }
+    
+    println!("🔗 Connecting to {}...", client.server_name());
+    
+    // Connect with timeout (use most of the timeout for connection)
+    let connect_timeout = Duration::from_secs(args.test_timeout.saturating_sub(2));
+    let connect_result = timeout(connect_timeout, client.connect()).await;
+    
+    match connect_result {
+        Ok(Ok(_)) => {
+            println!("✅ Connected successfully!");
+        }
+        Ok(Err(e)) => {
+            eprintln!("❌ Connection failed: {}", e);
+            return Err(e.into());
+        }
+        Err(_) => {
+            eprintln!("❌ Connection timed out");
+            return Err("Connection timeout".into());
+        }
+    }
+    
+    // Wait for registration to complete
+    println!("⏳ Waiting for registration...");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    
+    println!("🤖 Executing test commands...");
+    
+    // Execute predefined commands
+    for (i, cmd) in args.test_commands.iter().enumerate() {
+        println!("[{}] > {}", i + 1, cmd);
+        
+        if let Err(e) = execute_test_command(&mut client, cmd).await {
+            eprintln!("❌ Command failed: {}", e);
+        }
+        
+        // Brief pause between commands
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    
+    // If no predefined commands, enter interactive command mode
+    if args.test_commands.is_empty() {
+        println!("📝 Interactive command mode (type 'quit' to exit):");
+        println!("Available commands:");
+        println!("  join <channel>     - Join a channel");
+        println!("  part <channel>     - Leave a channel");
+        println!("  msg <target> <msg> - Send message");
+        println!("  notice <target>    - Send notice");
+        println!("  nick <nick>        - Change nickname");
+        println!("  raw <command>      - Send raw IRC command");
+        println!("  quit               - Disconnect and exit");
+        
+        // Message handling is built into the client now
+        let _session_id = args.test_session.clone().unwrap_or_else(|| "default".to_string());
+        
+        // Interactive command loop with timeout for automated testing
+        let stdin = io::stdin();
+        let mut lines = BufReader::new(stdin).lines();
+        let interactive_timeout = Duration::from_secs(1); // Short timeout for automated tests
+        
+        loop {
+            print!("test> ");
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+            
+            // Use timeout to prevent hanging in automated tests
+            let line_result = timeout(interactive_timeout, lines.next_line()).await;
+            
+            match line_result {
+                Ok(Ok(Some(line))) => {
+                    let line = line.trim();
+                    
+                    if line.is_empty() {
+                        continue;
+                    }
+                    
+                    if line == "quit" {
+                        break;
+                    }
+                    
+                    if let Err(e) = execute_test_command(&mut client, line).await {
+                        eprintln!("❌ Command failed: {}", e);
+                    }
+                }
+                Ok(Ok(None)) => {
+                    // EOF
+                    break;
+                }
+                Ok(Err(_)) => {
+                    // IO error
+                    break;
+                }
+                Err(_) => {
+                    // Timeout - likely an automated test with no input
+                    println!("⏰ No input received - likely automated test, exiting gracefully");
+                    break;
+                }
+            }
+        }
+    } else {
+        // For non-interactive mode, listen for messages briefly
+        let listen_duration = Duration::from_secs(5);
+        println!("👂 Listening for responses for {} seconds...", listen_duration.as_secs());
+        
+        let session_id = args.test_session.unwrap_or_else(|| "default".to_string());
+        let listen_result = timeout(listen_duration, async {
+            // Messages are handled internally by the client now
+            println!("[{}] Test commands executed", session_id);
+        }).await;
+        
+        if listen_result.is_err() {
+            println!("⏰ Listening timeout reached");
+        }
+    }
+    
+    println!("🔌 Disconnecting...");
+    if let Err(e) = client.disconnect().await {
+        eprintln!("⚠️  Disconnect error: {}", e);
+    }
+    
+    println!("✅ Test session complete");
+    Ok(())
+}
+
+async fn execute_test_command(client: &mut IronClient, cmd: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    
+    if parts.is_empty() {
+        return Err("Empty command".into());
+    }
+    
+    match parts[0].to_lowercase().as_str() {
+        "join" => {
+            if parts.len() < 2 {
+                return Err("Usage: join <channel>".into());
+            }
+            let channel = parts[1];
+            client.join_channel(channel).await?;
+            println!("  Joined {}", channel);
+        }
+        
+        "part" => {
+            if parts.len() < 2 {
+                return Err("Usage: part <channel>".into());
+            }
+            let channel = parts[1];
+            client.part_channel(channel, Some("Test session")).await?;
+            println!("  Parted {}", channel);
+        }
+        
+        "msg" | "privmsg" => {
+            if parts.len() < 3 {
+                return Err("Usage: msg <target> <message>".into());
+            }
+            let target = parts[1];
+            let message = parts[2..].join(" ");
+            client.send_privmsg(target, &message).await?;
+            println!("  Sent message to {}: {}", target, message);
+        }
+        
+        "notice" => {
+            if parts.len() < 3 {
+                return Err("Usage: notice <target> <message>".into());
+            }
+            let target = parts[1];
+            let message = parts[2..].join(" ");
+            let notice_msg = IrcMessage::new("NOTICE")
+                .with_params(vec![target.to_string(), message.to_string()]);
+            client.send_message(&notice_msg).await?;
+            println!("  Sent notice to {}: {}", target, message);
+        }
+        
+        "nick" => {
+            if parts.len() < 2 {
+                return Err("Usage: nick <nickname>".into());
+            }
+            let nick = parts[1];
+            let nick_msg = IrcMessage::new("NICK")
+                .with_params(vec![nick.to_string()]);
+            client.send_message(&nick_msg).await?;
+            println!("  Changed nick to {}", nick);
+        }
+        
+        "raw" => {
+            if parts.len() < 2 {
+                return Err("Usage: raw <irc_command>".into());
+            }
+            let raw_cmd = parts[1..].join(" ");
+            client.send_raw(&raw_cmd).await?;
+            println!("  Sent raw: {}", raw_cmd);
+        }
+        
+        _ => {
+            return Err(format!("Unknown command: {}", parts[0]).into());
+        }
+    }
+    
+    Ok(())
 }

@@ -1,5 +1,5 @@
 use crate::client::IronClient;
-use crate::message::IrcMessage;
+use iron_protocol::IrcMessage;
 use crate::error::Result;
 
 use tokio::io::{self, AsyncBufReadExt, BufReader};

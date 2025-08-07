@@ -8,6 +8,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/yourusername/ironchat"
 
 [dependencies]
+# Shared IRC protocol library
+iron-protocol = { path = "../iron-protocol", features = ["std", "serde", "chrono", "bleeding-edge"] }
+
 tokio = { version = "1.0", features = ["full"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["std"] }
@@ -16,7 +19,6 @@ bytes = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
-base64 = "0.22"
 libc = "0.2"
 url = "2.5"
 serde = { version = "1.0", features = ["derive"] }
@@ -34,6 +36,9 @@ rand = "0.8"
 signal-hook = "0.3"
 signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 regex = "1.10"
+
+# Some crypto deps still needed by client auth module
+base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"
 pbkdf2 = { version = "0.12", features = ["simple"] }

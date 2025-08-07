@@ -1,16 +1,114 @@
 use crate::error::{IronError, Result};
-use crate::message::IrcMessage;
+use iron_protocol::IrcMessage;
 use crate::dos_protection::DosProtection;
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsConnector, client::TlsStream};
 use rustls::{ClientConfig, RootCertStore};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, AsyncRead, AsyncWrite};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, AsyncRead, AsyncWrite, BufReader};
 use crate::{iron_debug, iron_error, iron_info, iron_warn};
 use std::time::{Duration, Instant};
 
+pub enum Connection {
+    Secure(SecureConnection),
+    Plain(PlainConnection),
+}
+
+impl Connection {
+    pub async fn connect(host: &str, port: u16, use_tls: bool, verify_certs: bool) -> Result<Self> {
+        Self::connect_with_dos_protection(host, port, use_tls, verify_certs, None).await
+    }
+
+    pub async fn connect_with_dos_protection(
+        host: &str, 
+        port: u16, 
+        use_tls: bool,
+        verify_certs: bool,
+        dos_protection: Option<Arc<DosProtection>>
+    ) -> Result<Self> {
+        if use_tls {
+            let conn = if let Some(dos) = dos_protection {
+                SecureConnection::connect_with_dos_protection(host, port, verify_certs, Some(dos)).await?
+            } else {
+                SecureConnection::connect(host, port, verify_certs).await?
+            };
+            Ok(Connection::Secure(conn))
+        } else {
+            let conn = if let Some(dos) = dos_protection {
+                PlainConnection::connect_with_dos_protection(host, port, Some(dos)).await?
+            } else {
+                PlainConnection::connect(host, port).await?
+            };
+            Ok(Connection::Plain(conn))
+        }
+    }
+
+    pub async fn read_message(&mut self) -> Result<Option<IrcMessage>> {
+        match self {
+            Connection::Secure(conn) => conn.read_message().await,
+            Connection::Plain(conn) => conn.read_message().await,
+        }
+    }
+
+    pub async fn send_message(&mut self, message: &IrcMessage) -> Result<()> {
+        match self {
+            Connection::Secure(conn) => conn.send_message(message).await,
+            Connection::Plain(conn) => conn.send_message(message).await,
+        }
+    }
+
+    pub async fn send_raw(&mut self, data: &str) -> Result<()> {
+        match self {
+            Connection::Secure(conn) => conn.send_raw(data).await,
+            Connection::Plain(conn) => conn.send_raw(data).await,
+        }
+    }
+
+    pub fn time_since_last_activity(&self) -> Duration {
+        match self {
+            Connection::Secure(conn) => conn.time_since_last_activity(),
+            Connection::Plain(conn) => conn.time_since_last_activity(),
+        }
+    }
+
+    pub fn server_name(&self) -> &str {
+        match self {
+            Connection::Secure(conn) => conn.server_name(),
+            Connection::Plain(conn) => conn.server_name(),
+        }
+    }
+
+    pub fn connection_id(&self) -> &str {
+        match self {
+            Connection::Secure(conn) => conn.connection_id(),
+            Connection::Plain(conn) => conn.connection_id(),
+        }
+    }
+
+    pub fn dos_protection(&self) -> Option<&Arc<DosProtection>> {
+        match self {
+            Connection::Secure(conn) => conn.dos_protection(),
+            Connection::Plain(conn) => conn.dos_protection(),
+        }
+    }
+
+    pub fn is_tls_active(&self) -> bool {
+        match self {
+            Connection::Secure(conn) => conn.is_tls_active(),
+            Connection::Plain(conn) => conn.is_tls_active(),
+        }
+    }
+
+    pub async fn split_for_sasl(&mut self) -> Result<()> {
+        match self {
+            Connection::Secure(conn) => conn.split_for_sasl().await,
+            Connection::Plain(conn) => conn.split_for_sasl().await,
+        }
+    }
+}
+
 pub struct SecureConnection {
-    pub stream: TlsStream<TcpStream>,
+    reader: tokio::io::BufReader<TlsStream<TcpStream>>,
     last_activity: Instant,
     server_name: String,
     connection_id: String,
@@ -23,7 +121,7 @@ impl AsyncRead for SecureConnection {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.stream).poll_read(cx, buf)
+        std::pin::Pin::new(&mut self.reader).poll_read(cx, buf)
     }
 }
 
@@ -33,21 +131,21 @@ impl AsyncWrite for SecureConnection {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
-        std::pin::Pin::new(&mut self.stream).poll_write(cx, buf)
+        std::pin::Pin::new(self.reader.get_mut()).poll_write(cx, buf)
     }
 
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-        std::pin::Pin::new(&mut self.stream).poll_flush(cx)
+        std::pin::Pin::new(self.reader.get_mut()).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-        std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
+        std::pin::Pin::new(self.reader.get_mut()).poll_shutdown(cx)
     }
 }
 
@@ -109,7 +207,7 @@ impl SecureConnection {
         }
         
         Ok(Self {
-            stream: tls_stream,
+            reader: tokio::io::BufReader::new(tls_stream),
             last_activity: Instant::now(),
             server_name: host.to_string(),
             connection_id,
@@ -119,11 +217,10 @@ impl SecureConnection {
 
     pub async fn read_message(&mut self) -> Result<Option<IrcMessage>> {
         let mut line = String::new();
-        let mut reader = tokio::io::BufReader::new(&mut self.stream);
         
         // Use configurable read timeout
         let read_timeout = Duration::from_secs(300);
-        match tokio::time::timeout(read_timeout, reader.read_line(&mut line)).await {
+        match tokio::time::timeout(read_timeout, self.reader.read_line(&mut line)).await {
             Ok(Ok(0)) => {
                 iron_info!("connection", "Connection closed by server");
                 // Cleanup DoS protection state
@@ -166,7 +263,7 @@ impl SecureConnection {
                     Ok(msg) => Ok(Some(msg)),
                     Err(e) => {
                         iron_error!("connection", "Failed to parse message '{}': {}", line.trim(), e);
-                        Err(e)
+                        Err(e.into())
                     }
                 }
             }
@@ -191,7 +288,7 @@ impl SecureConnection {
 
         iron_debug!("connection", "Sending: {}", serialized.trim());
         
-        self.stream.write_all(serialized.as_bytes()).await
+        self.reader.get_mut().write_all(serialized.as_bytes()).await
             .map_err(|e| IronError::Io(e))?;
         
         self.last_activity = Instant::now();
@@ -199,7 +296,14 @@ impl SecureConnection {
     }
 
     pub async fn send_raw(&mut self, data: &str) -> Result<()> {
-        if data.len() > 512 {
+        // CAP messages can be longer due to capability lists
+        let max_len = if data.starts_with("CAP ") {
+            4096
+        } else {
+            512
+        };
+        
+        if data.len() > max_len {
             return Err(IronError::SecurityViolation(
                 "Raw message too long".to_string()
             ));
@@ -223,7 +327,7 @@ impl SecureConnection {
 
         iron_debug!("connection", "Sending raw: {}", line.trim());
         
-        self.stream.write_all(line.as_bytes()).await
+        self.reader.get_mut().write_all(line.as_bytes()).await
             .map_err(|e| IronError::Io(e))?;
 
         self.last_activity = Instant::now();
@@ -259,6 +363,253 @@ impl SecureConnection {
 }
 
 impl Drop for SecureConnection {
+    fn drop(&mut self) {
+        // Cleanup DoS protection state when connection is dropped
+        if let Some(ref dos) = self.dos_protection {
+            let connection_id = self.connection_id.clone();
+            let dos_clone = dos.clone();
+            tokio::spawn(async move {
+                dos_clone.unregister_connection(&connection_id).await;
+            });
+        }
+    }
+}
+
+pub struct PlainConnection {
+    reader: tokio::io::BufReader<TcpStream>,
+    last_activity: Instant,
+    server_name: String,
+    connection_id: String,
+    dos_protection: Option<Arc<DosProtection>>,
+}
+
+impl AsyncRead for PlainConnection {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.reader).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for PlainConnection {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
+        std::pin::Pin::new(self.reader.get_mut()).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
+        std::pin::Pin::new(self.reader.get_mut()).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
+        std::pin::Pin::new(self.reader.get_mut()).poll_shutdown(cx)
+    }
+}
+
+impl PlainConnection {
+    pub async fn connect(host: &str, port: u16) -> Result<Self> {
+        Self::connect_with_dos_protection(host, port, None).await
+    }
+
+    pub async fn connect_with_dos_protection(
+        host: &str, 
+        port: u16, 
+        dos_protection: Option<Arc<DosProtection>>
+    ) -> Result<Self> {
+        iron_info!("connection", "🔗 Connecting to {}:{} without TLS", host, port);
+
+        // Add connection timeout
+        let connect_timeout = Duration::from_secs(10); // Reduced timeout
+        let tcp_stream = tokio::time::timeout(
+            connect_timeout,
+            TcpStream::connect((host, port))
+        ).await
+            .map_err(|_| IronError::Connection("Connection timeout".to_string()))?
+            .map_err(|e| IronError::Connection(format!("Failed to connect: {}", e)))?;
+
+        tcp_stream.set_nodelay(true)
+            .map_err(|e| IronError::Connection(format!("Failed to set nodelay: {}", e)))?;
+
+        // Get local address for connection ID
+        let local_addr = tcp_stream.local_addr()
+            .map_err(|e| IronError::Connection(format!("Failed to get local address: {}", e)))?;
+        let connection_id = format!("{}:{}", local_addr.ip(), local_addr.port());
+
+        // Register with DoS protection if available
+        if let Some(ref dos) = dos_protection {
+            dos.register_connection(connection_id.clone()).await?;
+        }
+        
+        iron_info!("connection", "✅ Connected successfully to {}:{}", host, port);
+        
+        Ok(Self {
+            reader: tokio::io::BufReader::new(tcp_stream),
+            last_activity: Instant::now(),
+            server_name: host.to_string(),
+            connection_id,
+            dos_protection,
+        })
+    }
+
+    pub async fn read_message(&mut self) -> Result<Option<IrcMessage>> {
+        // Use persistent BufReader - this is the key fix!
+        let read_timeout = Duration::from_secs(10);
+        
+        let mut line = String::new();
+        
+        match tokio::time::timeout(read_timeout, self.reader.read_line(&mut line)).await {
+            Ok(Ok(0)) => {
+                iron_info!("connection", "📡 Connection closed by server");
+                if let Some(ref dos) = self.dos_protection {
+                    dos.unregister_connection(&self.connection_id).await;
+                }
+                return Ok(None);
+            }
+            Ok(Ok(bytes_read)) => {
+                self.last_activity = Instant::now();
+                iron_info!("connection", "📨 RECEIVED ({} bytes): '{}'", bytes_read, line.trim());
+                
+                // Check with DoS protection first
+                if let Some(ref dos) = self.dos_protection {
+                    dos.check_message(&self.connection_id, &line).await?;
+                }
+                
+                if line.len() > 8704 { // 512 + 8191 + some buffer
+                    return Err(IronError::SecurityViolation(
+                        "Message exceeds maximum length".to_string()
+                    ));
+                }
+
+                if !line.is_ascii() {
+                    return Err(IronError::SecurityViolation(
+                        "Non-ASCII characters in message".to_string()
+                    ));
+                }
+
+                // Track parsing time for DoS protection
+                let parse_start = Instant::now();
+                let result = line.parse::<IrcMessage>();
+                
+                // Check parsing timeout
+                if let Some(ref dos) = self.dos_protection {
+                    dos.check_parse_timeout(parse_start).await?;
+                }
+
+                match result {
+                    Ok(msg) => Ok(Some(msg)),
+                    Err(e) => {
+                        iron_error!("connection", "Failed to parse message '{}': {}", line.trim(), e);
+                        Err(e.into())
+                    }
+                }
+            }
+            Ok(Err(e)) => Err(IronError::Io(e)),
+            Err(_) => Err(IronError::Connection("Read timeout".to_string())),
+        }
+    }
+
+    pub async fn send_message(&mut self, message: &IrcMessage) -> Result<()> {
+        let serialized = message.to_string();
+        
+        // Check with DoS protection for outgoing messages
+        if let Some(ref dos) = self.dos_protection {
+            dos.check_message(&self.connection_id, &serialized).await?;
+        }
+        
+        if serialized.len() > 8704 {
+            return Err(IronError::SecurityViolation(
+                "Outgoing message too long".to_string()
+            ));
+        }
+
+        iron_debug!("connection", "Sending: {}", serialized.trim());
+        
+        self.reader.get_mut().write_all(serialized.as_bytes()).await
+            .map_err(|e| IronError::Io(e))?;
+        
+        self.last_activity = Instant::now();
+        Ok(())
+    }
+
+    pub async fn send_raw(&mut self, data: &str) -> Result<()> {
+        // CAP messages can be longer due to capability lists
+        let max_len = if data.starts_with("CAP ") {
+            4096
+        } else {
+            512
+        };
+        
+        if data.len() > max_len {
+            return Err(IronError::SecurityViolation(
+                "Raw message too long".to_string()
+            ));
+        }
+
+        if !data.is_ascii() {
+            return Err(IronError::SecurityViolation(
+                "Non-ASCII characters in raw message".to_string()
+            ));
+        }
+
+        let mut line = data.to_string();
+        if !line.ends_with("\r\n") {
+            line.push_str("\r\n");
+        }
+
+        // Check with DoS protection for raw messages
+        if let Some(ref dos) = self.dos_protection {
+            dos.check_message(&self.connection_id, &line).await?;
+        }
+
+        iron_debug!("connection", "Sending raw: {}", line.trim());
+        
+        self.reader.get_mut().write_all(line.as_bytes()).await
+            .map_err(|e| IronError::Io(e))?;
+
+        self.last_activity = Instant::now();
+        Ok(())
+    }
+
+    pub fn time_since_last_activity(&self) -> Duration {
+        self.last_activity.elapsed()
+    }
+
+    pub fn server_name(&self) -> &str {
+        &self.server_name
+    }
+
+    pub fn connection_id(&self) -> &str {
+        &self.connection_id
+    }
+
+    pub fn dos_protection(&self) -> Option<&Arc<DosProtection>> {
+        self.dos_protection.as_ref()
+    }
+
+    pub fn is_tls_active(&self) -> bool {
+        // PlainConnection never uses TLS
+        false
+    }
+
+    pub async fn split_for_sasl(&mut self) -> Result<()> {
+        // For plain connections, we'll handle SASL authentication directly
+        // using send_raw and read_message methods instead of splitting the stream
+        Ok(())
+    }
+}
+
+impl Drop for PlainConnection {
     fn drop(&mut self) {
         // Cleanup DoS protection state when connection is dropped
         if let Some(ref dos) = self.dos_protection {

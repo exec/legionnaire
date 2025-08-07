@@ -1,6 +1,6 @@
 use crate::connection_manager::{ConnectionManager, ConnectionEvent};
-use crate::message::IrcMessage;
-use crate::capabilities::CapabilityHandler;
+use iron_protocol::IrcMessage;
+use iron_protocol::CapabilityHandler;
 use crate::auth::SaslAuthenticator;
 use crate::error::{IronError, Result, ConnectionState, DisconnectReason};
 use crate::client::IrcConfig;
@@ -37,6 +37,9 @@ pub struct ReliableIronClient {
     message_tx: Option<mpsc::UnboundedSender<IrcMessage>>,
     message_rx: Option<mpsc::UnboundedReceiver<IrcMessage>>,
     
+    // Auto-join channels (delayed until TUI is ready)
+    pending_auto_join: Vec<String>,
+    
     // Auto-reconnect settings
     auto_reconnect_enabled: bool,
     
@@ -63,6 +66,8 @@ impl ReliableIronClient {
             
             message_tx: Some(message_tx),
             message_rx: Some(message_rx),
+            
+            pending_auto_join: Vec::new(),
             
             auto_reconnect_enabled: true,
             
@@ -268,10 +273,9 @@ impl ReliableIronClient {
                 self.connection_manager.set_state(ConnectionState::Registered).await;
                 self.emit_client_event(ClientEvent::RegistrationComplete).await;
                 
-                // Join configured channels
-                for channel in &self.config.channels.clone() {
-                    self.join_channel(channel).await?;
-                }
+                // NOTE: Auto-join is now handled by TUI after startup to avoid timing issues
+                // Store channels for later auto-join
+                self.pending_auto_join = self.config.channels.clone();
             }
             "CAP" => {
                 if let Err(e) = self.handle_cap_message(&message).await {
@@ -561,6 +565,11 @@ impl ReliableIronClient {
 
     pub fn take_message_receiver(&mut self) -> Option<mpsc::UnboundedReceiver<IrcMessage>> {
         self.message_rx.take()
+    }
+
+    // Get pending auto-join channels and clear the list
+    pub fn get_pending_auto_join(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_auto_join)
     }
 }
 

@@ -27,6 +27,13 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelConfig {
+    pub name: String,
+    #[serde(default)]
+    pub auto_load_history: Option<bool>, // None = use server default, Some(bool) = override
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub name: String,
     pub host: String,
@@ -39,7 +46,28 @@ pub struct ServerConfig {
     #[serde(default)]
     pub channels: Vec<String>,
     #[serde(default)]
+    pub channel_configs: Vec<ChannelConfig>,
+    #[serde(default = "default_auto_load_history")]
+    pub auto_load_history: bool,
+    #[serde(default)]
     pub sasl: Option<SaslConfig>,
+}
+
+impl ServerConfig {
+    /// Check if auto-history loading is enabled for a specific channel
+    pub fn should_auto_load_history(&self, channel_name: &str) -> bool {
+        // First check for channel-specific override
+        for channel_config in &self.channel_configs {
+            if channel_config.name == channel_name {
+                if let Some(auto_load) = channel_config.auto_load_history {
+                    return auto_load;
+                }
+            }
+        }
+        
+        // Fall back to server default
+        self.auto_load_history
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +146,10 @@ fn default_verify_certs() -> bool {
     true
 }
 
+fn default_auto_load_history() -> bool {
+    true
+}
+
 fn default_help_key() -> String {
     "Ctrl+h".to_string()
 }
@@ -192,6 +224,8 @@ impl Default for Config {
                     tls: true,
                     verify_certificates: true,
                     channels: vec![],
+                    channel_configs: vec![],
+                    auto_load_history: true,
                     sasl: None,
                 },
                 ServerConfig {
@@ -201,6 +235,8 @@ impl Default for Config {
                     tls: true,
                     verify_certificates: true,
                     channels: vec![],
+                    channel_configs: vec![],
+                    auto_load_history: true,
                     sasl: None,
                 },
             ],
@@ -397,7 +433,9 @@ impl Config {
                 port: 6697,
                 tls: true,
                 verify_certificates: true,
-                channels: vec!["#client-testing".to_string()],
+                channels: vec![],
+                channel_configs: vec![],
+                auto_load_history: true,
                 sasl: None,
             }],
             user: UserConfig {
@@ -419,7 +457,9 @@ impl Config {
                 port: 6697,
                 tls: true,
                 verify_certificates: true,
-                channels: vec!["#debian".to_string()],
+                channels: vec![],
+                channel_configs: vec![],
+                auto_load_history: true,
                 sasl: None,
             }],
             user: UserConfig {
@@ -441,7 +481,9 @@ impl Config {
                 port: 6697,
                 tls: true,
                 verify_certificates: true,
-                channels: vec!["#efnet".to_string()],
+                channels: vec![],
+                channel_configs: vec![],
+                auto_load_history: true,
                 sasl: None,
             }],
             user: UserConfig {
@@ -463,7 +505,9 @@ impl Config {
                 port: 6697,
                 tls: true,
                 verify_certificates: true,
-                channels: vec!["#quakenet".to_string()],
+                channels: vec![],
+                channel_configs: vec![],
+                auto_load_history: true,
                 sasl: None,
             }],
             user: UserConfig {
@@ -523,6 +567,8 @@ impl Config {
                 tls: true,
                 verify_certificates: true,
                 channels: vec![],
+                channel_configs: vec![],
+                auto_load_history: true,
                 sasl: None,
             },
             "3" => {
@@ -551,6 +597,8 @@ impl Config {
                     tls,
                     verify_certificates: true,
                     channels: vec![],
+                    channel_configs: vec![],
+                    auto_load_history: true,
                     sasl: None,
                 }
             }
@@ -561,6 +609,8 @@ impl Config {
                 tls: true,
                 verify_certificates: true,
                 channels: vec![],
+                channel_configs: vec![],
+                auto_load_history: true,
                 sasl: None,
             },
         };
