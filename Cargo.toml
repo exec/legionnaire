@@ -1,15 +1,17 @@
 [package]
-name = "ironchat"
+name = "legionnaire"
 version = "0.1.1"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
-description = "A modern, security-hardened IRCv3 client"
+authors = ["Legionnaire Contributors"]
+description = "⚔️ Legionnaire - Secure IRC client with Legion Protocol support"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/ironchat"
+repository = "https://github.com/exec/legionnaire"
 
 [dependencies]
 # Shared IRC protocol library
-iron-protocol = { path = "../iron-protocol", features = ["std", "serde", "chrono", "bleeding-edge"] }
+legion-protocol = { path = "../legion-protocol", features = ["std", "serde", "chrono", "bleeding-edge"] }
+# E2E encryption protocol
+phalanx = { path = "../phalanx", features = ["std", "serde", "async"] }
 
 tokio = { version = "1.0", features = ["full"] }
 tokio-rustls = "0.26"
@@ -36,12 +38,18 @@ rand = "0.8"
 signal-hook = "0.3"
 signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 regex = "1.10"
+async-trait = "0.1"
+reqwest = { version = "0.11", features = ["json"] }
+fastrand = "2.0"
+rpassword = "7.0"
+chacha20poly1305 = "0.10"
 
 # Some crypto deps still needed by client auth module
 base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"
 pbkdf2 = { version = "0.12", features = ["simple"] }
+blake3 = "1.5"
 
 [[example]]
 name = "reliable_client_demo"

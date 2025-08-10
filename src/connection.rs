@@ -1,5 +1,5 @@
 use crate::error::{IronError, Result};
-use iron_protocol::IrcMessage;
+use legion_protocol::IrcMessage;
 use crate::dos_protection::DosProtection;
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsConnector, client::TlsStream};

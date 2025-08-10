@@ -550,7 +550,7 @@ async fn test_property_based_integration() {
 #[cfg(feature = "bleeding-edge")]
 #[tokio::test]
 async fn test_ircv3_reply_react_integration() {
-    use iron_protocol::{MessageReply, MessageReaction, ReactionAction};
+    use legion_protocol::{MessageReply, MessageReaction, ReactionAction};
     
     // Test 1: MessageReply creation and parsing
     let reply = MessageReply::new(
@@ -569,7 +569,7 @@ async fn test_ircv3_reply_react_integration() {
     
     // Test round-trip parsing
     let reply_str = reply_msg.to_string();
-    let parsed_msg = reply_str.parse::<iron_protocol::IrcMessage>().unwrap();
+    let parsed_msg = reply_str.parse::<legion_protocol::IrcMessage>().unwrap();
     
     let parsed_reply = MessageReply::from_message(&parsed_msg).unwrap();
     assert_eq!(parsed_reply.target, "#rust");
@@ -596,7 +596,7 @@ async fn test_ircv3_reply_react_integration() {
     
     // Test round-trip parsing
     let reaction_str = reaction_msg.to_string();
-    let parsed_reaction_msg = reaction_str.parse::<iron_protocol::IrcMessage>().unwrap();
+    let parsed_reaction_msg = reaction_str.parse::<legion_protocol::IrcMessage>().unwrap();
     
     let parsed_reaction = MessageReaction::from_message(&parsed_reaction_msg).unwrap();
     assert_eq!(parsed_reaction.target, "#rust");
@@ -606,7 +606,7 @@ async fn test_ircv3_reply_react_integration() {
     
     // Test 3: Complex IRCv3 message parsing with multiple tags
     let complex_msg_str = r#"@msgid=abc123;time=2024-01-01T12:00:00.000Z;+draft/reply=original456 PRIVMSG #rust :@bob This is a threaded reply with timestamp"#;
-    let complex_msg = complex_msg_str.parse::<iron_protocol::IrcMessage>().unwrap();
+    let complex_msg = complex_msg_str.parse::<legion_protocol::IrcMessage>().unwrap();
     
     // Verify all tags are parsed correctly
     assert!(complex_msg.has_tag("msgid"));
@@ -631,7 +631,7 @@ async fn test_ircv3_reply_react_integration() {
     ];
     
     for invalid_msg in invalid_messages {
-        let parsed = invalid_msg.parse::<iron_protocol::IrcMessage>().unwrap();
+        let parsed = invalid_msg.parse::<legion_protocol::IrcMessage>().unwrap();
         
         // Should fail to parse as reply/reaction due to invalid format
         if parsed.has_tag("+draft/reply") {
@@ -672,7 +672,7 @@ async fn test_ircv3_tag_parsing_edge_cases() {
     ];
     
     for (msg_str, expected_tags) in test_cases {
-        let parsed = msg_str.parse::<iron_protocol::IrcMessage>().unwrap();
+        let parsed = msg_str.parse::<legion_protocol::IrcMessage>().unwrap();
         
         // Check that all expected tags are present
         for (key, expected_value) in expected_tags {

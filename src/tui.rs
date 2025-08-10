@@ -1,5 +1,5 @@
 use crate::client::IronClient;
-use iron_protocol::IrcMessage;
+use legion_protocol::IrcMessage;
 use crate::error::Result;
 use crate::config::{Config, KeybindingsConfig};
 use crate::{iron_debug, iron_info, iron_warn, iron_error};
@@ -52,7 +52,6 @@ pub struct IrcTui {
     previous_sidebar_selection: usize,  // Previous position before jumping to send button
     channel_users_expanded: HashMap<String, bool>,  // Track which channels have users expanded
     running: bool,
-    pending_send: bool,  // Flag to indicate message should be sent
     user_context_menu: Option<UserContextMenu>,  // Active user context menu
     message_context_menu: Option<MessageContextMenu>,  // Active message context menu
     reaction_modal: Option<ReactionModal>,  // Active reaction modal
@@ -298,7 +297,6 @@ impl IrcTui {
             previous_sidebar_selection: 0,
             channel_users_expanded: HashMap::new(),
             running: false,
-            pending_send: false,
             user_context_menu: None,
             message_context_menu: None,
             reaction_modal: None,
@@ -348,7 +346,6 @@ impl IrcTui {
             previous_sidebar_selection: 0,
             channel_users_expanded: HashMap::new(),
             running: false,
-            pending_send: false,
             user_context_menu: None,
             message_context_menu: None,
             reaction_modal: None,
@@ -393,6 +390,9 @@ impl IrcTui {
         self.add_system_message("Connected to IRC server");
         self.add_system_message(&format!("Keys: {} for help, {} for sidebar, {} to quit", 
             self.keybindings.toggle_help, self.keybindings.toggle_users, self.keybindings.quit));
+            
+        // Add a delayed task to show capabilities after registration
+        iron_debug!("tui_start", "TUI started, will show capabilities after registration");
 
         // Create event stream
         let mut event_stream = EventStream::new();
@@ -440,18 +440,6 @@ impl IrcTui {
                     }
                 }
                 
-                // Handle pending send from sidebar
-                if self.pending_send {
-                    self.pending_send = false;
-                    if !self.input.is_empty() {
-                        if let Err(e) = self.handle_input().await {
-                            iron_error!("tui", "Error handling pending send: {}", e);
-                        }
-                        // Ensure input is cleared after sending
-                        self.input.clear();
-                        self.input_cursor = 0;
-                    }
-                }
             }
             Ok::<(), crate::error::IronError>(())
         }.await;
@@ -480,8 +468,19 @@ impl IrcTui {
 
         // Server tab will contain all server messages and debug logs
         self.add_system_message("TUI initialized - all debug messages will appear here");
+        
+        // Show capabilities if available
+        let capabilities = self.client.get_enabled_capabilities();
+        if !capabilities.is_empty() {
+            self.add_message("Server", None, "─── IRCv3 Capabilities ───".to_string(), MessageType::Notice);
+            for cap in capabilities {
+                self.add_message("Server", None, format!("  {}", cap), MessageType::Notice);
+            }
+        } else {
+            self.add_message("Server", None, "No IRCv3 capabilities enabled".to_string(), MessageType::Notice);
+        }
 
-        // Setup file logging to ~/.ironchat.log
+        // Setup file logging to ~/.legionnaire.log
         self.setup_file_logging();
 
         // Handle auto-join channels after TUI is ready
@@ -591,18 +590,6 @@ impl IrcTui {
                     }
                 }
                 
-                // Handle pending send from sidebar
-                if self.pending_send {
-                    self.pending_send = false;
-                    if !self.input.is_empty() {
-                        if let Err(e) = self.handle_input().await {
-                            iron_error!("tui", "Error handling pending send: {}", e);
-                        }
-                        // Ensure input is cleared after sending
-                        self.input.clear();
-                        self.input_cursor = 0;
-                    }
-                }
             }
             Ok::<(), crate::error::IronError>(())
         }.await;
@@ -688,8 +675,8 @@ impl IrcTui {
             Self::draw_sidebar(f, main_chunks[1], channels, channel_order, current_tab, sidebar_selection, focus_mode);
         }
 
-        // Draw input with send button
-        Self::draw_input_with_send(f, chunks[1], input, input_cursor, sidebar_selection);
+        // Draw input
+        Self::draw_input(f, chunks[1], input, input_cursor);
 
         // Draw help overlay if enabled
         if show_help {
@@ -976,48 +963,20 @@ impl IrcTui {
     }
 
 
-    fn draw_input_with_send(f: &mut Frame, area: Rect, input: &str, input_cursor: usize, sidebar_selection: usize) {
-        // Split area for input field and send button
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(20), Constraint::Length(12)])
-            .split(area);
-        
+    fn draw_input(f: &mut Frame, area: Rect, input: &str, input_cursor: usize) {
         // Draw input field
         let input_widget = Paragraph::new(input)
             .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Input")
+            .block(Block::default().borders(Borders::ALL).title("Input (Press Enter to send)")
                 .border_style(Style::default().fg(Color::DarkGray)));
         
-        f.render_widget(input_widget, chunks[0]);
+        f.render_widget(input_widget, area);
         
         // Show cursor in input field
         f.set_cursor(
-            chunks[0].x + input_cursor as u16 + 1,
-            chunks[0].y + 1,
+            area.x + input_cursor as u16 + 1,
+            area.y + 1,
         );
-        
-        // Draw send button
-        let send_text = "📤 Send";
-        let is_send_focused = sidebar_selection == usize::MAX; // Special value for send button
-        
-        let send_style = if is_send_focused {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD).bg(Color::DarkGray)
-        } else {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-        };
-        
-        let send_widget = Paragraph::new(send_text)
-            .style(send_style)
-            .block(Block::default().borders(Borders::ALL)
-                .border_style(if is_send_focused { 
-                    Style::default().fg(Color::Cyan) 
-                } else { 
-                    Style::default().fg(Color::DarkGray) 
-                }))
-            .alignment(ratatui::layout::Alignment::Center);
-        
-        f.render_widget(send_widget, chunks[1]);
     }
 
     fn draw_user_context_menu(f: &mut Frame, menu: &UserContextMenu) {
@@ -1540,12 +1499,18 @@ impl IrcTui {
                                     KeyCode::Up => self.sidebar_up(),
                                     KeyCode::Down => self.sidebar_down(),
                                     KeyCode::Left => {
-                                        // Only allow left arrow if not on send button
-                                        if self.sidebar_selection != usize::MAX {
-                                            self.focus_mode = FocusMode::Input;
+                                        self.focus_mode = FocusMode::Input;
+                                    }
+                                    KeyCode::Enter => {
+                                        // If input is not empty, send message instead of sidebar select
+                                        if !self.input.is_empty() {
+                                            if let Err(e) = self.handle_input().await {
+                                                iron_error!("tui", "Failed to send message from sidebar: {}", e);
+                                            }
+                                        } else {
+                                            self.sidebar_select();
                                         }
                                     }
-                                    KeyCode::Enter => self.sidebar_select(),
                                     KeyCode::Tab => self.handle_tab_completion(),
                                     KeyCode::Char(c) => {
                                         // When typing in sidebar, switch to input and add the character
@@ -1624,7 +1589,7 @@ impl IrcTui {
                         if self.client.is_capability_enabled("+draft/reply") {
                             iron_debug!("reply", "Sending reply to message: {} with text: {}", reply_to_id, input);
                             
-                            use iron_protocol::MessageReply;
+                            use legion_protocol::MessageReply;
                             let reply = MessageReply::new(
                                 channel_name.clone(),
                                 reply_to_id.clone(),
@@ -2227,6 +2192,21 @@ impl IrcTui {
                             if let Some(content) = message.params.last() {
                                 self.add_message("Server", None, content.clone(), MessageType::Notice);
                             }
+                            
+                            // Show capabilities after server features message (005)
+                            if numeric_code == "005" {
+                                iron_debug!("capability_display", "005 message received, checking capabilities");
+                                let capabilities = self.client.get_enabled_capabilities();
+                                iron_debug!("capability_display", "Found {} capabilities: {:?}", capabilities.len(), capabilities);
+                                if !capabilities.is_empty() {
+                                    self.add_message("Server", None, "─── IRCv3 Capabilities ───".to_string(), MessageType::Notice);
+                                    for cap in capabilities {
+                                        self.add_message("Server", None, format!("  {}", cap), MessageType::Notice);
+                                    }
+                                } else {
+                                    self.add_message("Server", None, "No IRCv3 capabilities enabled".to_string(), MessageType::Notice);
+                                }
+                            }
                         }
                         // MOTD
                         "372" => { // RPL_MOTD
@@ -2783,20 +2763,14 @@ impl IrcTui {
     }
 
     fn sidebar_up(&mut self) {
-        if self.sidebar_selection == usize::MAX {
-            // Coming from send button, go to last sidebar item
-            self.sidebar_selection = self.get_total_sidebar_items() - 1;
-            // Skip spacing if we land on it
-            while self.is_spacing_item(self.sidebar_selection) && self.sidebar_selection > 0 {
-                self.sidebar_selection -= 1;
-            }
-        } else if self.sidebar_selection > 0 {
+        if self.sidebar_selection > 0 {
             self.sidebar_selection -= 1;
             // Skip spacing if we land on it
             while self.is_spacing_item(self.sidebar_selection) && self.sidebar_selection > 0 {
                 self.sidebar_selection -= 1;
             }
         }
+        // No send button logic needed
     }
 
     fn sidebar_down(&mut self) {
@@ -2807,38 +2781,16 @@ impl IrcTui {
             while self.is_spacing_item(self.sidebar_selection) && self.sidebar_selection < max_items - 1 {
                 self.sidebar_selection += 1;
             }
-        } else if self.sidebar_selection == max_items - 1 {
-            // Jump to send button
-            self.sidebar_selection = usize::MAX;
         }
+        // No send button, so stay at bottom item
     }
 
-    fn sidebar_jump_to_send(&mut self) {
-        // Only jump if we're not already at the send button
-        if self.sidebar_selection != usize::MAX {
-            self.previous_sidebar_selection = self.sidebar_selection;
-            self.sidebar_selection = usize::MAX;
-        }
-    }
-
-    fn sidebar_return_from_send(&mut self) {
-        // Only return if we're currently at the send button
-        if self.sidebar_selection == usize::MAX {
-            self.sidebar_selection = self.previous_sidebar_selection;
-        }
-    }
 
     fn is_spacing_item(&self, index: usize) -> bool {
         matches!(self.get_sidebar_item_type(index), SidebarItemType::Spacing)
     }
 
-    fn sidebar_select(&mut self) {
-        // Handle send button selection
-        if self.sidebar_selection == usize::MAX {
-            self.sidebar_send_message();
-            return;
-        }
-        
+    fn sidebar_select(&mut self) {        
         match self.get_sidebar_item_type(self.sidebar_selection) {
             SidebarItemType::Channel(channel_index) => {
                 // Switch to the selected channel
@@ -2868,14 +2820,6 @@ impl IrcTui {
         }
     }
 
-    fn sidebar_send_message(&mut self) {
-        // Send the current input if it's not empty
-        if !self.input.is_empty() {
-            // Create a fake event to trigger message sending
-            // We'll handle this in the main event loop
-            self.pending_send = true;
-        }
-    }
 
     fn show_user_context_menu(&mut self, user_index: usize) {
         if let Some(channel_name) = self.get_current_channel_name() {
@@ -2961,7 +2905,7 @@ impl IrcTui {
                         }
                         
                         // Send the reaction using iron-protocol
-                        use iron_protocol::{MessageReaction, ReactionAction};
+                        use legion_protocol::{MessageReaction, ReactionAction};
                         
                         iron_debug!("emoji_picker", "Creating MessageReaction...");
                         let reaction = MessageReaction::new(
@@ -3231,6 +3175,12 @@ impl IrcTui {
                             let max_index = total_messages.saturating_sub(1);
                             if current_index < max_index {
                                 self.selected_message_index = Some(current_index + 1);
+                                
+                                // Auto-scroll if needed to keep message visible
+                                self.ensure_message_visible(current_index + 1);
+                            } else {
+                                // At the oldest visible message, try to scroll up and load more history
+                                self.auto_scroll_for_navigation(true);
                             }
                         }
                     }
@@ -3253,9 +3203,12 @@ impl IrcTui {
                             // Move to next message (lower index, newer message)
                             if current_index > 0 {
                                 self.selected_message_index = Some(current_index - 1);
+                                
+                                // Auto-scroll if needed to keep message visible
+                                self.ensure_message_visible(current_index - 1);
                             } else {
-                                // Already at the newest message, deselect
-                                self.selected_message_index = None;
+                                // At the newest message, scroll down to show more recent content
+                                self.auto_scroll_for_navigation(false);
                             }
                         }
                     }
@@ -3329,6 +3282,65 @@ impl IrcTui {
     fn clear_message_selection(&mut self) {
         self.selected_message_index = None;
         self.message_context_menu = None;
+    }
+
+    /// Ensure the selected message is visible in the current scroll view
+    fn ensure_message_visible(&mut self, message_index: usize) {
+        if let Some(channel_name) = self.get_current_channel_name() {
+            if let Some(channel) = self.channels.get(&channel_name) {
+                let total_messages = channel.messages.len();
+                if total_messages == 0 { return; }
+                
+                // Calculate viewport (messages currently visible)
+                let messages_per_page = 20; // Approximate based on terminal height
+                let scroll_offset = self.message_scroll;
+                
+                // Message indices are from newest (0) to oldest (total-1)
+                // Scroll offset 0 = showing newest messages
+                let viewport_start = scroll_offset;
+                let viewport_end = scroll_offset + messages_per_page;
+                
+                // If selected message is outside viewport, adjust scroll
+                if message_index < viewport_start {
+                    // Message is too new (below current view), scroll down
+                    self.message_scroll = message_index;
+                } else if message_index >= viewport_end {
+                    // Message is too old (above current view), scroll up
+                    self.message_scroll = message_index.saturating_sub(messages_per_page / 2);
+                }
+            }
+        }
+    }
+
+    /// Handle auto-scrolling when navigating beyond current view
+    fn auto_scroll_for_navigation(&mut self, going_up: bool) {
+        if going_up {
+            // Going to older messages - scroll up by a few messages
+            let scroll_amount = 5;
+            if let Some(channel_name) = self.get_current_channel_name() {
+                if let Some(channel) = self.channels.get(&channel_name) {
+                    let max_scroll = channel.messages.len().saturating_sub(1);
+                    self.message_scroll = (self.message_scroll + scroll_amount).min(max_scroll);
+                    
+                    // Try to select a message in the new view
+                    let new_selection = (self.selected_message_index.unwrap_or(0) + scroll_amount).min(max_scroll);
+                    self.selected_message_index = Some(new_selection);
+                }
+            }
+        } else {
+            // Going to newer messages - scroll down
+            let scroll_amount = 5;
+            self.message_scroll = self.message_scroll.saturating_sub(scroll_amount);
+            
+            // Try to select a message in the new view
+            if let Some(current_selection) = self.selected_message_index {
+                let new_selection = current_selection.saturating_sub(scroll_amount);
+                self.selected_message_index = Some(new_selection);
+            } else {
+                // No selection, clear it to go back to input
+                self.selected_message_index = None;
+            }
+        }
     }
 
     /// Scroll up through message history (PageUp)
@@ -3519,7 +3531,7 @@ impl IrcTui {
 
     fn setup_file_logging(&mut self) {
         let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        let log_path = format!("{}/.ironchat.log", home_dir);
+        let log_path = format!("{}/.legionnaire.log", home_dir);
         
         match OpenOptions::new()
             .create(true)

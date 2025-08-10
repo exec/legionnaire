@@ -1,5 +1,5 @@
 use crate::client::IronClient;
-use iron_protocol::IrcMessage;
+use legion_protocol::IrcMessage;
 use crate::error::Result;
 
 use std::collections::HashMap;

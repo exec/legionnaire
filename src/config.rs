@@ -1,5 +1,6 @@
 use crate::error::{IronError, Result};
 use crate::dos_protection::DosProtectionConfig;
+use crate::client::IrcConfig;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -24,6 +25,9 @@ pub struct Config {
     
     #[serde(default)]
     pub dos_protection: DosProtectionConfig,
+    
+    #[serde(default)]
+    pub profiles: std::collections::HashMap<String, ProfileConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +35,12 @@ pub struct ChannelConfig {
     pub name: String,
     #[serde(default)]
     pub auto_load_history: Option<bool>, // None = use server default, Some(bool) = override
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileConfig {
+    pub servers: Vec<String>,
+    pub plugins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +78,24 @@ impl ServerConfig {
         // Fall back to server default
         self.auto_load_history
     }
+
+    /// Convert ServerConfig to IrcConfig
+    pub fn to_irc_config(&self) -> IrcConfig {
+        IrcConfig {
+            server: self.host.clone(),
+            port: self.port,
+            nickname: "legionnaire".to_string(),  // Default nickname
+            username: "legionnaire".to_string(),  // Default username  
+            realname: "IronChat IRCv3 Client".to_string(),  // Default realname
+            channels: self.channels.clone(),
+            tls_required: self.tls,
+            verify_certificates: self.verify_certificates,
+            connection_timeout: std::time::Duration::from_secs(30),
+            ping_timeout: std::time::Duration::from_secs(300),
+            reconnect_attempts: 5,
+            reconnect_delay: std::time::Duration::from_secs(5),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +110,7 @@ pub struct UserConfig {
 impl Default for UserConfig {
     fn default() -> Self {
         Self {
-            nickname: "ironchat_user".to_string(),
+            nickname: "legionnaire_user".to_string(),
             username: None,
             realname: None,
         }
@@ -244,13 +272,14 @@ impl Default for Config {
             user: UserConfig::default(),
             keybindings: KeybindingsConfig::default(),
             dos_protection: DosProtectionConfig::default(),
+            profiles: std::collections::HashMap::new(),
         }
     }
 }
 
 impl Config {
     pub fn config_dir() -> Result<PathBuf> {
-        if let Some(proj_dirs) = ProjectDirs::from("", "", "ironchat") {
+        if let Some(proj_dirs) = ProjectDirs::from("", "", "legionnaire") {
             Ok(proj_dirs.config_dir().to_path_buf())
         } else {
             Err(IronError::Configuration("Could not determine config directory".to_string()))
@@ -439,12 +468,13 @@ impl Config {
                 sasl: None,
             }],
             user: UserConfig {
-                nickname: "ironchat_user".to_string(),
-                username: Some("ironchat".to_string()),
+                nickname: "legionnaire_user".to_string(),
+                username: Some("legionnaire".to_string()),
                 realname: Some("IronChat User".to_string()),
             },
             keybindings: KeybindingsConfig::default(),
             dos_protection: DosProtectionConfig::default(),
+            profiles: std::collections::HashMap::new(),
         };
         libera_config.save_profile("libera")?;
 
@@ -463,12 +493,13 @@ impl Config {
                 sasl: None,
             }],
             user: UserConfig {
-                nickname: "ironchat_user".to_string(),
-                username: Some("ironchat".to_string()),
+                nickname: "legionnaire_user".to_string(),
+                username: Some("legionnaire".to_string()),
                 realname: Some("IronChat User".to_string()),
             },
             keybindings: KeybindingsConfig::default(),
             dos_protection: DosProtectionConfig::default(),
+            profiles: std::collections::HashMap::new(),
         };
         oftc_config.save_profile("oftc")?;
 
@@ -487,12 +518,13 @@ impl Config {
                 sasl: None,
             }],
             user: UserConfig {
-                nickname: "ironchat_user".to_string(),
-                username: Some("ironchat".to_string()),
+                nickname: "legionnaire_user".to_string(),
+                username: Some("legionnaire".to_string()),
                 realname: Some("IronChat User".to_string()),
             },
             keybindings: KeybindingsConfig::default(),
             dos_protection: DosProtectionConfig::default(),
+            profiles: std::collections::HashMap::new(),
         };
         efnet_config.save_profile("efnet")?;
 
@@ -511,12 +543,13 @@ impl Config {
                 sasl: None,
             }],
             user: UserConfig {
-                nickname: "ironchat_user".to_string(),
-                username: Some("ironchat".to_string()),
+                nickname: "legionnaire_user".to_string(),
+                username: Some("legionnaire".to_string()),
                 realname: Some("IronChat User".to_string()),
             },
             keybindings: KeybindingsConfig::default(),
             dos_protection: DosProtectionConfig::default(),
+            profiles: std::collections::HashMap::new(),
         };
         quakenet_config.save_profile("quakenet")?;
 
@@ -713,6 +746,7 @@ impl Config {
             },
             keybindings: KeybindingsConfig::default(),
             dos_protection: DosProtectionConfig::default(),
+            profiles: std::collections::HashMap::new(),
         };
         
         // Ask for profile name
@@ -728,7 +762,7 @@ impl Config {
         config.save_profile(profile_name)?;
         
         stdout.write_all(format!("\nProfile '{}' saved successfully!\n", profile_name).as_bytes()).await?;
-        stdout.write_all(format!("Start IronChat with: ironchat {}\n\n", profile_name).as_bytes()).await?;
+        stdout.write_all(format!("Start Legionnaire with: legionnaire {}\n\n", profile_name).as_bytes()).await?;
         stdout.flush().await?;
         
         Ok(config)
@@ -857,7 +891,7 @@ mod tests {
         assert_eq!(config.servers[0].name, "Libera Chat");
         assert_eq!(config.servers[1].name, "OFTC");
         assert_eq!(config.default_server, Some("Libera Chat".to_string()));
-        assert_eq!(config.user.nickname, "ironchat_user");
+        assert_eq!(config.user.nickname, "legionnaire_user");
     }
 
     #[test]
@@ -1306,7 +1340,7 @@ toggle_help = "F1"
         
         // Should use defaults
         assert!(!config.servers.is_empty());
-        assert_eq!(config.user.nickname, "ironchat_user");
+        assert_eq!(config.user.nickname, "legionnaire_user");
     }
 
     #[test]

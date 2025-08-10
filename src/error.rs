@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ConnectionState {
     Disconnected,
     Connecting,
@@ -99,41 +99,41 @@ impl From<std::io::Error> for IronError {
     }
 }
 
-impl From<iron_protocol::IronError> for IronError {
-    fn from(err: iron_protocol::IronError) -> Self {
+impl From<legion_protocol::IronError> for IronError {
+    fn from(err: legion_protocol::IronError) -> Self {
         match err {
-            iron_protocol::IronError::Parse(msg) => IronError::Parse(msg),
-            iron_protocol::IronError::SecurityViolation(msg) => IronError::SecurityViolation(msg),
-            iron_protocol::IronError::Auth(msg) => IronError::Auth(msg),
-            iron_protocol::IronError::Connection(msg) => IronError::Connection(msg),
-            iron_protocol::IronError::Protocol(msg) => IronError::Parse(msg),
-            iron_protocol::IronError::RateLimit(msg) => IronError::SecurityViolation(msg),
-            iron_protocol::IronError::Config(msg) => IronError::Configuration(msg),
-            iron_protocol::IronError::Capability(msg) => IronError::Configuration(msg),
-            iron_protocol::IronError::Sasl(msg) => IronError::Auth(msg),
-            iron_protocol::IronError::Io(msg) => IronError::Connection(msg),
-            iron_protocol::IronError::Timeout(msg) => IronError::Timeout(msg),
-            iron_protocol::IronError::InvalidInput(msg) => IronError::InvalidMessage(msg),
-            iron_protocol::IronError::NotSupported(msg) => IronError::Configuration(msg),
-            iron_protocol::IronError::Internal(msg) => IronError::Connection(msg),
+            legion_protocol::IronError::Parse(msg) => IronError::Parse(msg),
+            legion_protocol::IronError::SecurityViolation(msg) => IronError::SecurityViolation(msg),
+            legion_protocol::IronError::Auth(msg) => IronError::Auth(msg),
+            legion_protocol::IronError::Connection(msg) => IronError::Connection(msg),
+            legion_protocol::IronError::Protocol(msg) => IronError::Parse(msg),
+            legion_protocol::IronError::RateLimit(msg) => IronError::SecurityViolation(msg),
+            legion_protocol::IronError::Config(msg) => IronError::Configuration(msg),
+            legion_protocol::IronError::Capability(msg) => IronError::Configuration(msg),
+            legion_protocol::IronError::Sasl(msg) => IronError::Auth(msg),
+            legion_protocol::IronError::Io(msg) => IronError::Connection(msg),
+            legion_protocol::IronError::Timeout(msg) => IronError::Timeout(msg),
+            legion_protocol::IronError::InvalidInput(msg) => IronError::InvalidMessage(msg),
+            legion_protocol::IronError::NotSupported(msg) => IronError::Configuration(msg),
+            legion_protocol::IronError::Internal(msg) => IronError::Connection(msg),
         }
     }
 }
 
-impl From<IronError> for iron_protocol::IronError {
+impl From<IronError> for legion_protocol::IronError {
     fn from(err: IronError) -> Self {
         match err {
-            IronError::Connection(msg) => iron_protocol::IronError::Connection(msg),
-            IronError::Tls(msg) => iron_protocol::IronError::Connection(msg),
-            IronError::Parse(msg) => iron_protocol::IronError::Parse(msg),
-            IronError::Auth(msg) => iron_protocol::IronError::Auth(msg),
-            IronError::InvalidMessage(msg) => iron_protocol::IronError::InvalidInput(msg),
-            IronError::SecurityViolation(msg) => iron_protocol::IronError::SecurityViolation(msg),
-            IronError::Configuration(msg) => iron_protocol::IronError::Config(msg),
-            IronError::Io(io_err) => iron_protocol::IronError::Io(io_err.to_string()),
-            IronError::Reconnect(msg) => iron_protocol::IronError::Connection(msg),
-            IronError::Timeout(msg) => iron_protocol::IronError::Timeout(msg),
-            IronError::NetworkUnavailable(msg) => iron_protocol::IronError::Connection(msg),
+            IronError::Connection(msg) => legion_protocol::IronError::Connection(msg),
+            IronError::Tls(msg) => legion_protocol::IronError::Connection(msg),
+            IronError::Parse(msg) => legion_protocol::IronError::Parse(msg),
+            IronError::Auth(msg) => legion_protocol::IronError::Auth(msg),
+            IronError::InvalidMessage(msg) => legion_protocol::IronError::InvalidInput(msg),
+            IronError::SecurityViolation(msg) => legion_protocol::IronError::SecurityViolation(msg),
+            IronError::Configuration(msg) => legion_protocol::IronError::Config(msg),
+            IronError::Io(io_err) => legion_protocol::IronError::Io(io_err.to_string()),
+            IronError::Reconnect(msg) => legion_protocol::IronError::Connection(msg),
+            IronError::Timeout(msg) => legion_protocol::IronError::Timeout(msg),
+            IronError::NetworkUnavailable(msg) => legion_protocol::IronError::Connection(msg),
         }
     }
 }

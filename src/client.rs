@@ -1,6 +1,6 @@
 use crate::connection::Connection;
 use crate::error::{IronError, Result};
-use iron_protocol::{IrcMessage, CapabilityHandler};
+use legion_protocol::{IrcMessage, CapabilityHandler};
 use crate::auth::SaslAuthenticator;
 use crate::dos_protection::DosProtection;
 use crate::dos_protection::DosProtectionConfig;
@@ -32,8 +32,8 @@ impl Default for IrcConfig {
         Self {
             server: "irc.libera.chat".to_string(),
             port: 6697,
-            nickname: "ironchat".to_string(),
-            username: "ironchat".to_string(),
+            nickname: "legionnaire".to_string(),
+            username: "legionnaire".to_string(),
             realname: "IronChat IRCv3 Client".to_string(),
             channels: Vec::new(),
             tls_required: true,
@@ -362,6 +362,18 @@ impl IronClient {
         }
         if self.cap_handler.is_capability_enabled("sts") {
             caps.push("🔒 STS".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("+draft/react") {
+            caps.push("😀 Reactions".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("+draft/reply") {
+            caps.push("↩️ Replies".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("echo-message") {
+            caps.push("📢 Echo-message".to_string());
+        }
+        if self.cap_handler.is_capability_enabled("batch") {
+            caps.push("📦 Batch".to_string());
         }
         
         caps
@@ -910,7 +922,7 @@ mod tests {
         
         assert!(!client.is_connected());
         assert!(!client.is_registered());
-        assert_eq!(client.current_nickname(), "ironchat");
+        assert_eq!(client.current_nickname(), "legionnaire");
     }
 
     #[test]

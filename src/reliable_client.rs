@@ -1,6 +1,6 @@
 use crate::connection_manager::{ConnectionManager, ConnectionEvent};
-use iron_protocol::IrcMessage;
-use iron_protocol::CapabilityHandler;
+use legion_protocol::IrcMessage;
+use legion_protocol::CapabilityHandler;
 use crate::auth::SaslAuthenticator;
 use crate::error::{IronError, Result, ConnectionState, DisconnectReason};
 use crate::client::IrcConfig;

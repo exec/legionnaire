@@ -1,8 +1,9 @@
-use ironchat::{IronClient, IrcUi, IrcTui, Config};
-use ironchat::client::IrcConfig;
-use ironchat::config::SaslConfig;
-use ironchat::{iron_info, iron_error, iron_warn, iron_debug};
-use iron_protocol::IrcMessage;
+use legionnaire::{IronClient, IrcUi, IrcTui, Config, Bouncer, BouncerConfig};
+use legionnaire::client::IrcConfig;
+use legionnaire::config::SaslConfig;
+use legionnaire::{iron_info, iron_error, iron_warn, iron_debug};
+use legionnaire::cli::{CliHandler, CliCommand};
+use legion_protocol::IrcMessage;
 use std::env;
 use std::panic;
 use clap::Parser;
@@ -58,6 +59,22 @@ struct Args {
     /// Timeout for testing mode in seconds
     #[arg(long, default_value = "30")]
     test_timeout: u64,
+    
+    /// Run in bouncer daemon mode
+    #[arg(long)]
+    bouncer: bool,
+    
+    /// Bouncer listen address
+    #[arg(long, default_value = "127.0.0.1")]
+    bouncer_addr: String,
+    
+    /// Bouncer listen port  
+    #[arg(long, default_value = "6697")]
+    bouncer_port: u16,
+    
+    /// CLI mode - execute a single command
+    #[command(subcommand)]
+    cli: Option<CliCommand>,
 }
 
 #[tokio::main]
@@ -105,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     
     // Initialize custom logger system
-    ironchat::logger::init_logger()?;
+    legionnaire::logger::init_logger()?;
     
     // Show config path if requested
     if args.config_path {
@@ -126,6 +143,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     iron_info!("main", "Starting IronChat - Security-Hardened IRCv3 Client");
+
+    // Handle CLI mode
+    if let Some(cli_command) = args.cli {
+        // In CLI mode, we execute a single command and exit
+        let server_config = if let Some(profile) = args.config_name {
+            Config::load_profile(&profile).ok().and_then(|c| c.get_server(args.server.as_deref()).map(|sc| sc.to_irc_config()))
+        } else {
+            None
+        };
+        
+        let mut cli_handler = CliHandler::new(server_config);
+        cli_handler.execute(cli_command).await?;
+        return Ok(());
+    }
+    
+    // Handle bouncer daemon mode
+    if args.bouncer {
+        iron_info!("main", "Starting bouncer daemon on {}:{}", args.bouncer_addr, args.bouncer_port);
+        
+        // Create bouncer config
+        let bouncer_config = BouncerConfig {
+            listen_addr: args.bouncer_addr,
+            listen_port: args.bouncer_port,
+            password: "".to_string(),  // TODO: Add password arg
+            use_tls: false,
+            max_clients: 10,
+            history_size: 5000,
+            auto_replay: true,
+            keepalive_interval: 60,
+        };
+        
+        // Create IRC config for the bouncer's server connection
+        let irc_config = if let Some(profile) = args.config_name {
+            Config::load_profile(&profile).ok()
+                .and_then(|c| c.get_server(args.server.as_deref()).map(|sc| sc.to_irc_config()))
+                .unwrap_or_else(|| IrcConfig::default())
+        } else {
+            IrcConfig::default()
+        };
+        
+        // Create and start bouncer
+        let mut bouncer = Bouncer::new(bouncer_config, irc_config);
+        bouncer.start().await?;
+        
+        iron_info!("main", "Bouncer daemon started successfully");
+        
+        // Keep running until interrupted
+        tokio::signal::ctrl_c().await?;
+        
+        iron_info!("main", "Shutting down bouncer daemon");
+        
+        return Ok(());
+    }
 
     // Load or create config
     let app_config = if args.setup {
@@ -361,7 +431,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(e) => {
                         iron_error!("main", "❌ Failed to create TUI: {}", e);
                         println!("⚠️  TUI initialization failed, this may be due to remote server message burst");
-                        println!("💡 Try using: \x1b[96mironchat libera --classic\x1b[0m for text-only mode");
+                        println!("💡 Try using: \x1b[96mlegionnaire libera --classic\x1b[0m for text-only mode");
                         std::process::exit(1);
                     }
                 }

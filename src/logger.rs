@@ -74,7 +74,7 @@ impl IronLogger {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // Create log file in home directory
         let mut log_path = PathBuf::from(std::env::var("HOME")?);
-        log_path.push(".ironchat.log");
+        log_path.push(".legionnaire.log");
         
         let file = OpenOptions::new()
             .create(true)
@@ -125,7 +125,7 @@ impl IronLogger {
     // Fallback logger that does nothing if file creation fails
     pub fn fallback() -> Self {
         // Create a temporary file for fallback
-        let temp_file = std::env::temp_dir().join("ironchat_fallback.log");
+        let temp_file = std::env::temp_dir().join("legionnaire_fallback.log");
         let file = OpenOptions::new()
             .create(true)
             .append(true)
