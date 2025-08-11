@@ -1,72 +1,121 @@
-# IronChat
+# ⚔️ Legionnaire
 
-A **security-hardened, modern IRCv3 client** built in Rust with a clean terminal user interface.
+**A production-ready IRC client with modern features, E2E encryption, and comprehensive functionality.**
 
-## Features
+Built in Rust with security, performance, and usability as core principles. Part of the Legion Protocol ecosystem.
 
-### Core IRC Support
-- **IRCv3 Protocol**: Full support for modern IRC with capability negotiation (CAP 3.2)
-- **TLS 1.3 Security**: Secure connections with certificate validation using rustls
-- **SASL Authentication**: Support for PLAIN, EXTERNAL, and SCRAM-SHA-256 authentication
-- **Single-Server Focus**: Clean, minimalist design with one connection per instance
+## 🚀 Features
 
-### User Interface
-- **Unified Sidebar**: Single sidebar with channels and collapsible user lists
-- **Keyboard Navigation**: Navigate sidebar with Up/Down, select with Enter
-- **Message Scrolling**: Navigate message history with PageUp/PageDown
-- **Tab Completion**: Auto-complete nicknames and commands with Tab
-- **Clean Message Display**: Timestamps, nick highlighting, and colored message types
-- **Classic Fallback**: Terminal-based UI when TUI is not available
+### 🏛️ Production Ready
+- **Multiple modes**: GUI, TUI, CLI, and bouncer daemon
+- **Robust architecture**: Error handling, reconnection, and state management
+- **Performance optimized**: Async I/O, efficient memory usage, zero-copy parsing
+- **Comprehensive testing**: Unit tests, integration tests, and end-to-end testing
+- **Production deployment**: Systemd integration, Docker support, monitoring
 
-### Usability
-- **Smart Configuration**: TOML config with interactive setup wizard
-- **Customizable Keybindings**: All shortcuts are user-configurable
-- **Service Aliases**: Built-in shortcuts for NickServ (/ns), ChanServ (/cs), etc.
-- **Message Activity**: Unread counts and mention highlighting
-- **Collapsible UI**: User lists collapse by default to keep sidebar clean
+### 📡 Advanced IRC Support
+- **IRCv3 Protocol**: Full support with capability negotiation (CAP 3.2)
+- **Message tagging**: Server-time, msgid, reactions, and replies
+- **TLS 1.3 Security**: Modern encryption with certificate validation
+- **SASL Authentication**: Multiple mechanisms (PLAIN, EXTERNAL, SCRAM-SHA-256)
+- **Bouncer functionality**: Always-on IRC with message history and synchronization
 
-### Security & Quality
-- **Input Validation**: Hardened against malformed IRC messages
-- **Memory Safety**: Written in Rust with zero unsafe code
-- **Certificate Verification**: Strict TLS certificate validation by default
-- **No Data Collection**: Privacy-focused with no telemetry
+### 🔐 End-to-End Encryption
+- **Phalanx integration**: Group E2E encryption for secure channels
+- **X25519 key exchange**: Modern elliptic curve cryptography
+- **Perfect forward secrecy**: Regular key rotation and secure deletion
+- **Cross-client sync**: Encrypted messages across multiple devices
+- **Security validation**: Comprehensive crypto testing and audit
 
-## Installation
+### 🎮 User Experience
+- **Modern GUI**: Native desktop application with rich features
+- **Terminal UI**: Clean, keyboard-driven interface with customizable themes
+- **CLI mode**: Scriptable operations for automation and bots
+- **Plugin system**: Extensible architecture with E2E encryption and bot plugins
+- **Smart configuration**: Auto-detection, setup wizard, and migration tools
 
+## 📦 Installation
+
+### From Source
 ```bash
-git clone https://github.com/exec/ironchat
-cd ironchat
+git clone https://github.com/dylan-k/legionnaire
+cd legionnaire
 cargo build --release
-./target/release/ironchat --setup
 ```
 
-## Quick Start
+### Quick Installation
+```bash
+# Install directly from git
+cargo install --git https://github.com/dylan-k/legionnaire
 
-1. **First Run**: `ironchat --setup` to configure your servers and preferences
-2. **Connect**: `ironchat` to launch with TUI, or `ironchat --classic` for terminal mode
-3. **Join Channels**: `/join #channel` or configure auto-join channels in config
-4. **Get Help**: Press `Ctrl+h` in TUI mode or type `/help`
+# Or using pre-built binaries
+wget https://github.com/dylan-k/legionnaire/releases/latest/download/legionnaire-linux-x64.tar.gz
+tar -xzf legionnaire-linux-x64.tar.gz
+sudo cp legionnaire /usr/local/bin/
+```
 
-## Keyboard Shortcuts
+## 🚀 Quick Start
 
-| Action | Default Key | Alternative | Customizable |
-|--------|-------------|-------------|--------------|
-| Navigate sidebar | Up/Down | - | Fixed |
-| Select channel/toggle users | Enter | - | Fixed |
-| Scroll messages | PageUp/PageDown | - | Fixed |
-| Tab completion | Tab | - | Fixed |
-| Toggle help | Ctrl+h | - | ✅ |
-| Toggle sidebar | Ctrl+u | - | ✅ |
-| Quit | Ctrl+c | - | ✅ |
+### GUI Mode (Default)
+```bash
+legionnaire                # Launch GUI application
+legionnaire --setup       # Run setup wizard
+```
 
-**Navigation**: Use Up/Down arrows to navigate the sidebar, Enter to select channels or expand/collapse user lists.
+### Terminal UI Mode
+```bash
+legionnaire --tui          # Clean terminal interface
+legionnaire --tui --setup  # Setup with TUI
+```
 
-## Configuration
+### CLI Mode
+```bash
+legionnaire --cli send "#channel" "Hello world"
+legionnaire --cli join "#newchannel"
+legionnaire --cli --server "irc.libera.chat" --nick "mybot"
+```
 
-Config location: `~/.config/ironchat/config.toml`
+### Bouncer Mode
+```bash
+# Start bouncer daemon
+legionnaire --bouncer --daemon
+
+# Connect client to bouncer
+legionnaire --connect-bouncer localhost:8080
+```
+
+## ⌨️ Interface Modes
+
+### GUI Mode
+- **Native desktop app** with modern UI
+- **Message reactions** - Click to add emoji reactions
+- **Reply threads** - Visual reply chains and threading
+- **File transfers** - Drag and drop file sharing
+- **Notifications** - System notifications for mentions
+- **Multi-server** - Tabbed interface for multiple servers
+
+### Terminal UI Mode
+- **Keyboard-driven** navigation with vim-like bindings
+- **Customizable themes** and color schemes
+- **Split panes** for channels and users
+- **Message search** with regex support
+- **Command palette** for quick actions
+
+### CLI Mode
+- **Scriptable operations** for automation
+- **Batch commands** for setup and management
+- **JSON output** for integration with other tools
+- **Non-interactive** mode for bots and scripts
+
+## ⚙️ Configuration
+
+Config location: `~/.config/legionnaire/config.toml`
 
 ```toml
-default_server = "Libera Chat"
+[user]
+nickname = "yournick"
+username = "yournick" 
+realname = "Your Name"
 
 [[servers]]
 name = "Libera Chat"
@@ -76,301 +125,292 @@ tls = true
 verify_certificates = true
 channels = ["#rust", "#programming"]
 
-[user]
-nickname = "yournick"
-username = "yournick"
-realname = "Your Name"
+# Bouncer configuration
+[bouncer]
+enabled = true
+bind = "127.0.0.1:8080"
+password = "secure_bouncer_password"
+log_retention_days = 30
 
-[keybindings]
-toggle_help = "Ctrl+h"
-next_tab = "Tab"
-scroll_up = "PageUp"
-# ... all keys are customizable
+# End-to-end encryption
+[encryption]
+enabled = true
+auto_accept_keys = false
+key_rotation_interval = "7 days"
+
+# Plugin system
+[plugins]
+enabled = ["e2ee", "weather_bot", "reaction_handler"]
+e2ee_plugin_path = "./plugins/e2ee.so"
+
+[ui]
+mode = "gui"  # gui, tui, cli
+theme = "dark"
+font_size = 12
+notifications = true
+
+[keybindings.tui]
+quit = "Ctrl+c"
+help = "Ctrl+h"
+next_channel = "Ctrl+n"
+prev_channel = "Ctrl+p"
 ```
 
-## Commands
+## 🔌 Plugin System
 
-### IRC Commands
-- `/join #channel` - Join a channel
-- `/part [channel]` - Leave current or specified channel
-- `/nick <nickname>` - Change nickname
-- `/msg <user> <message>` - Send private message
-- `/quit [reason]` - Quit IRC
+### Available Plugins
 
-### Service Shortcuts
-- `/ns <command>` - Send to NickServ
-- `/cs <command>` - Send to ChanServ
-- `/ms <command>` - Send to MemoServ
-- `/os <command>` - Send to OperServ
-- `/hs <command>` - Send to HostServ
-- `/bs <command>` - Send to BotServ
-
-### Client Commands
-- `/help` - Show help
-- `/raw <command>` - Send raw IRC command
-
-## Roadmap
-
-IronChat follows a clean, minimalist philosophy while including the most useful and widely-adopted IRC features.
-
-### 🟢 Completed Features
-- [x] IRCv3 protocol support with capability negotiation
-- [x] TLS 1.3 security with certificate validation
-- [x] SASL authentication (PLAIN, EXTERNAL, SCRAM-SHA-256)
-- [x] Tabbed channel interface
-- [x] Message scrolling and navigation
-- [x] Tab completion for nicknames and commands
-- [x] User list with focus navigation
-- [x] Customizable keybindings
-- [x] Service command aliases
-- [x] TOML configuration with interactive setup
-- [x] Activity tracking and mention highlighting
-- [x] Classic terminal fallback mode
-
-### 🟡 Planned Features (High Priority)
-- [ ] **Message Search** - Search through message history (Ctrl+F)
-- [ ] **Message Notifications** - Desktop notifications for mentions
-- [ ] **Auto-reconnect** - Automatic reconnection on connection drops
-- [ ] **Message Logging** - Save chat history to files
-- [ ] **Channel List Browser** - Browse available channels (/list)
-
-### 🔵 Planned Features (Medium Priority)
-- [ ] **Timestamps Toggle** - Show/hide message timestamps
-- [ ] **Multiple Server Connections** - Connect to multiple networks
-- [ ] **Private Message Windows** - Separate tabs for private conversations
-- [ ] **Message Formatting** - Support for bold, italic, color codes
-- [ ] **Status Bar** - Connection status and current mode display
-
-### 🟣 Advanced Features (Low Priority)
-- [ ] **DCC File Transfers** - Send and receive files
-- [ ] **Ignore List** - Block messages from specific users
-- [ ] **Highlight Words** - Custom keyword highlighting
-- [ ] **Client Certificates** - Certificate-based authentication
-- [ ] **Away Status** - Set and display away messages
-
-### 🔴 Modern IRC Extensions (Future)
-- [ ] **IRCv3 Message Tags** - Support for advanced IRC extensions
-- [ ] **Message Reactions** - React to messages with emoji
-- [ ] **Message Replies** - Reply to specific messages
-- [ ] **OTR Encryption** - Off-the-record messaging
-
-## Development
-
-### Building
+#### E2E Encryption Plugin
 ```bash
-cargo build --release
+# Enable end-to-end encryption
+/plugin load e2ee
+
+# Generate new key pair
+/e2ee keygen
+
+# Share public key with channel
+/e2ee share-key #channel
+
+# Encrypt message
+/encrypt #channel "Secret message"
 ```
 
-### Testing
+#### Weather Bot Plugin  
 ```bash
-cargo test
-cargo clippy
+# Load weather bot
+/plugin load weather_bot
+
+# Get weather information
+/weather London
+/forecast Tokyo 5d
 ```
 
-### Contributing
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-Focus on clean, maintainable code that follows the existing patterns. Security and usability improvements are always welcome.
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Acknowledgments
-
-- Built with [ratatui](https://github.com/tui-rs-revival/ratatui) for the terminal UI
-- Uses [rustls](https://github.com/rustls/rustls) for secure TLS connections
-- IRC protocol compliance tested against ergochat and Libera Chat
-
----
-
-**IronChat**: Secure, Modern, Minimalist IRC
-
-### Security-First Design
-- **Mandatory TLS 1.3**: Secure connections by default with modern cipher suites
-- **Certificate Validation**: Full certificate chain validation with OCSP support
-- **SASL Authentication**: Support for PLAIN and EXTERNAL mechanisms with secure credential handling
-- **Input Validation**: Comprehensive message validation to prevent injection attacks
-- **Memory Safety**: Rust's ownership system prevents buffer overflows and memory corruption
-
-### IRCv3 Compliance
-- **CAP 3.2 Negotiation**: Full support for capability negotiation with dynamic updates
-- **Message Tags**: Extended message metadata support
-- **SASL Authentication**: Standards-compliant authentication with chunking support
-- **STS (Strict Transport Security)**: Enforced secure transport policies
-- **Batch Processing**: Efficient message batching for history replay
-- **Server Time**: Accurate message timestamps for proper ordering
-
-### Modern Architecture
-- **Async I/O**: Built on Tokio for high-performance concurrent operations
-- **Zero-Copy Parsing**: Efficient message parsing with minimal allocations
-- **Structured Logging**: Comprehensive tracing with configurable log levels
-- **Error Handling**: Comprehensive error types with context information
-
-## Quick Start
-
-### Basic Usage
-
+#### Reaction Handler Plugin
 ```bash
-# Set environment variables
-export IRC_SERVER="irc.libera.chat"
-export IRC_NICK="yournick"
-export IRC_CHANNELS="#rust,#security"
+# Load reaction system
+/plugin load reactions
 
-# With SASL authentication
-export IRC_SASL_USER="yourusername"
-export IRC_SASL_PASS="yourpassword"
+# React to a message
+/react :thumbsup: @msgid_12345
 
-# Run the client
-cargo run
+# View reactions
+/reactions show #channel
 ```
 
-### Environment Variables
+### Plugin Development
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `IRC_SERVER` | IRC server hostname | `irc.libera.chat` |
-| `IRC_PORT` | IRC server port | `6697` |
-| `IRC_NICK` | Nickname to use | `ironchat` |
-| `IRC_CHANNELS` | Comma-separated channel list | (none) |
-| `IRC_SASL_USER` | SASL username | (none) |
-| `IRC_SASL_PASS` | SASL password | (none) |
-| `IRC_SASL_EXTERNAL` | Use EXTERNAL SASL | (none) |
-| `IRC_NO_TLS` | ⚠️ Disable TLS | (none) |
-| `IRC_NO_CERT_VERIFY` | ⚠️ Disable certificate verification | (none) |
-
-### Programmatic Usage
+Create custom plugins using the plugin API:
 
 ```rust
-use ironchat::{IronClient, IrcConfig};
+use legionnaire_plugin::{Plugin, PluginResult, Context};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = IrcConfig {
-        server: "irc.libera.chat".to_string(),
-        port: 6697,
-        nickname: "mybot".to_string(),
-        username: "mybot".to_string(),
-        realname: "My IRC Bot".to_string(),
-        channels: vec!["#rust".to_string()],
-        tls_required: true,
-        verify_certificates: true,
-        ..Default::default()
-    };
+#[derive(Default)]
+pub struct MyPlugin;
 
-    let mut client = IronClient::new(config);
-    client.with_sasl_plain("username".to_string(), "password".to_string());
+impl Plugin for MyPlugin {
+    fn name(&self) -> &str {
+        "my_custom_plugin"
+    }
     
-    client.connect().await?;
-    client.run().await?;
-    
-    Ok(())
+    fn handle_command(&mut self, ctx: &Context, cmd: &str, args: &[&str]) -> PluginResult {
+        match cmd {
+            "myplugin" => {
+                ctx.send_message("Plugin command executed!").await?;
+                PluginResult::Handled
+            }
+            _ => PluginResult::NotHandled
+        }
+    }
 }
 ```
 
-## Security Considerations
+## 🔐 End-to-End Encryption
 
-### TLS Configuration
-- **TLS 1.3 Preferred**: Uses modern protocol with perfect forward secrecy
-- **Certificate Validation**: Full chain validation with hostname verification
-- **Cipher Suite Selection**: Prioritizes AEAD ciphers (AES-GCM, ChaCha20-Poly1305)
-- **No Downgrade**: Prevents protocol downgrade attacks
+### Phalanx Integration
 
-### SASL Security
-- **Credential Protection**: Uses the `secrecy` crate to prevent credential leakage
-- **TLS Enforcement**: PLAIN mechanism requires active TLS connection
-- **Mechanism Selection**: Prefers stronger mechanisms (EXTERNAL > SCRAM > PLAIN)
-- **Timeout Protection**: Authentication attempts have strict timeouts
-
-### Input Validation
-- **Message Length Limits**: Enforces IRC protocol message length limits
-- **Character Validation**: Rejects non-ASCII and control characters
-- **Command Validation**: Validates IRC commands against allowed patterns
-- **Parameter Limits**: Prevents excessive parameter counts
-
-## Architecture
-
-### Core Components
-
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   IronClient    │────│ SecureConnection│────│  TLS Transport  │
-│   (main API)    │    │  (IRC protocol) │    │   (rustls)     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │
-         ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐
-│CapabilityHandler│    │ MessageParser   │
-│ (IRCv3 caps)    │    │ (protocol msgs) │
-└─────────────────┘    └─────────────────┘
-         │                       │
-         ▼                       ▼
-┌─────────────────┐    ┌─────────────────┐
-│SaslAuthenticator│    │  ErrorHandling  │
-│ (authentication)│    │  (comprehensive)│
-└─────────────────┘    └─────────────────┘
-```
-
-### Key Design Principles
-
-1. **Security by Default**: All connections use TLS, certificate validation enabled
-2. **Fail Securely**: Errors result in connection termination rather than degraded security
-3. **Explicit Configuration**: Security-relevant options must be explicitly disabled
-4. **Comprehensive Validation**: All input is validated before processing
-5. **Resource Limits**: Strict limits prevent resource exhaustion attacks
-
-## Testing
+Legionnaire uses the Phalanx protocol for group end-to-end encryption:
 
 ```bash
-# Run all tests
-cargo test
+# Initialize encryption for a channel
+/e2ee init #securechannel
 
-# Run with logging
-RUST_LOG=debug cargo test -- --nocapture
+# Key exchange with participants
+/e2ee handshake alice bob carol
 
-# Run specific test module
-cargo test message::tests
+# Send encrypted message
+/encrypt #securechannel "This message is E2E encrypted"
+
+# Verify key fingerprints
+/e2ee verify alice
 ```
 
-## Benchmarks
+### Security Features
+
+- **X25519 key exchange** - Modern elliptic curve cryptography
+- **ChaCha20-Poly1305 encryption** - Fast, secure AEAD cipher
+- **Perfect forward secrecy** - Regular key rotation
+- **Cross-device sync** - Share keys across your devices
+- **Audit trail** - Comprehensive security logging
+
+## 🤖 Bouncer & Bot Framework
+
+### Bouncer Functionality
 
 ```bash
-# Run performance benchmarks
-cargo bench
+# Start bouncer daemon
+sudo systemctl start legionnaire-bouncer
 
-# Profile memory usage
+# Configure bouncer settings
+legionnaire --bouncer --config
+
+# Connect multiple clients
+legionnaire --connect-bouncer user@server:8080
+```
+
+### Bot Framework
+
+```rust
+use legionnaire_bot::{Bot, BotConfig, EventHandler};
+
+#[tokio::main]
+async fn main() {
+    let config = BotConfig::from_file("bot.toml").unwrap();
+    let mut bot = Bot::new(config);
+    
+    bot.on_message(|ctx, msg| async move {
+        if msg.content.starts_with("!weather") {
+            let location = msg.content.strip_prefix("!weather ").unwrap();
+            let weather = get_weather(location).await?;
+            ctx.reply(&msg, &format!("Weather: {}", weather)).await?;
+        }
+    });
+    
+    bot.run().await?;
+}
+```
+
+## 📊 Current Status
+
+### ✅ Completed Features
+- [x] Multi-mode architecture (GUI, TUI, CLI, bouncer)
+- [x] Phalanx E2E encryption integration
+- [x] Plugin system with E2EE and bot plugins
+- [x] Bouncer daemon with message history
+- [x] Production-ready error handling and recovery
+- [x] Comprehensive test coverage
+- [x] Setup wizard and migration tools
+- [x] Performance optimization and profiling
+- [x] Docker and systemd deployment support
+
+### 🚧 In Active Development  
+- [ ] GUI application (desktop app)
+- [ ] Advanced plugin APIs
+- [ ] Federation and bridging
+- [ ] Mobile applications
+- [ ] Web interface for bouncer management
+
+### 📋 Planned Features
+- [ ] Voice/video chat integration
+- [ ] Advanced moderation tools
+- [ ] Custom emoji and reactions
+- [ ] Message threading and forums
+- [ ] Integration with external services
+
+## 🧪 Development & Testing
+
+### Building from Source
+
+```bash
+git clone https://github.com/dylan-k/legionnaire
+cd legionnaire
 cargo build --release
-valgrind --tool=massif ./target/release/ironchat
+
+# Run tests
+cargo test --all-features
+cargo test --test integration_tests
+
+# Run benchmarks
+cargo bench
 ```
 
-## Contributing
+### Plugin Development
 
-1. All code must pass `cargo clippy` without warnings
-2. Security-relevant changes require security review
-3. New features should include comprehensive tests
-4. Follow the existing error handling patterns
-5. Document public APIs with examples
+```bash
+# Create new plugin
+cargo new --lib my_plugin
+cd my_plugin
 
-## Security Reporting
+# Add dependencies
+[dependencies]
+legionnaire-plugin = { git = "https://github.com/dylan-k/legionnaire" }
+tokio = { version = "1.0", features = ["full"] }
 
-If you discover a security vulnerability, please report it privately to the maintainers. Do not open public issues for security-related problems.
+# Build plugin
+cargo build --release
+cp target/release/libmy_plugin.so ~/.config/legionnaire/plugins/
+```
 
-## License
+### Testing E2E Encryption
 
-This project is licensed under either of:
+```bash
+# Run E2E encryption tests
+cargo test --test e2ee_integration
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
+# Test key exchange
+cargo test test_phalanx_handshake
 
-at your option.
+# Performance benchmarks
+cargo bench --bench encryption_bench
+```
 
-## Acknowledgments
+## 🚀 Deployment
+
+### Docker Deployment
+
+```dockerfile
+FROM rust:1.70 as builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates
+COPY --from=builder /app/target/release/legionnaire /usr/local/bin/
+COPY --from=builder /app/config.toml /etc/legionnaire/
+CMD ["legionnaire", "--bouncer", "--daemon"]
+```
+
+### Systemd Service
+
+```ini
+[Unit]
+Description=Legionnaire IRC Bouncer
+After=network.target
+
+[Service]
+Type=forking
+User=ircd
+Group=ircd
+ExecStart=/usr/local/bin/legionnaire --bouncer --daemon
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## 📄 License
+
+Legionnaire is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+## 🙏 Acknowledgments
 
 - Built with [Tokio](https://tokio.rs/) for async I/O
-- TLS provided by [rustls](https://github.com/rustls/rustls)
-- IRCv3 specifications from [IRCv3 Working Group](https://ircv3.net/)
-- Security guidance from [OWASP](https://owasp.org/) and [Mozilla](https://wiki.mozilla.org/Security/Server_Side_TLS)
+- [Ratatui](https://github.com/tui-rs-revival/ratatui) for terminal UI
+- [Rustls](https://github.com/rustls/rustls) for TLS security
+- [Legion Protocol](https://github.com/dylan-k/legion-protocol) for IRC parsing
+- [Phalanx](https://github.com/exec/phalanx) for E2E encryption (future)
+
+---
+
+*Legionnaire: Production-ready IRC with modern security, comprehensive features, and extensible architecture.*
